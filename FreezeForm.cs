@@ -402,7 +402,7 @@ internal sealed class FreezeForm : Form
         "arrowSwap" => "Nyíl irányának cseréje",
         "arrowEnd" => "Nyíl a végén",
         "size" => "Képarány",
-        "copy" => "Mentés és vágólap  (Enter)",
+        "copy" => "Vágólapra másol és PNG-be ment  (Enter)",
         "folder" => "Mentési mappa:  " + Settings.SaveFolder,
         _ when id.StartsWith("color") => null,
         _ => null,
@@ -1202,8 +1202,8 @@ internal sealed class FreezeForm : Form
         using var sizeFont = new Font("Segoe UI", 12 * S, GraphicsUnit.Pixel);
         _sizeText = _ratioName != null ? $"{_sel.Width} × {_sel.Height}  ·  {_ratioName}" : $"{_sel.Width} × {_sel.Height}";
         int sizeW = TextRenderer.MeasureText(_sizeText, sizeFont).Width + (int)(22 * S);
-        int copyBtnW = (int)(112 * S);
-        int copyW = sizeW + b + gap + copyBtnW + pad;   // [méret] [mappa] [Másolás]
+        int copyBtnW = (int)(204 * S);                  // "Másol [ikon] & Ment [ikon]"
+        int copyW = sizeW + copyBtnW + gap + b + pad;   // [méret] [📋💾 Másolás] [mappa]
         int orderW = pad * 2 + b * 4 + gap * 3;   // rétegsorrend panel
         int total = toolsW + between + orderW + between + copyW;
 
@@ -1258,11 +1258,11 @@ internal sealed class FreezeForm : Form
         _sizeRect = new Rectangle(copyPanel.X + pad, y + pad, sizeW - pad, h - pad * 2);
         _buttons.Add(new UiButton("size", _sizeRect, () => { _ratioMenuOpen = !_ratioMenuOpen; Invalidate(); },
             () => _ratioMenuOpen, DrawSizeLabel));
-        // Mentési mappa a Másolás mellett
-        _buttons.Add(new UiButton("folder", new Rectangle(copyPanel.X + sizeW, y + pad, b, b),
-            ChooseFolder, () => false, DrawFolderIcon));
-        _buttons.Add(new UiButton("copy", new Rectangle(copyPanel.X + sizeW + b + gap, y + pad, copyBtnW, h - pad * 2),
+        // Másolás (vágólap + mentés), jobbra mellette a mentési mappa – a "hova" a "mentés" után jön
+        _buttons.Add(new UiButton("copy", new Rectangle(copyPanel.X + sizeW, y + pad, copyBtnW, h - pad * 2),
             Confirm, () => false, DrawCopyButton, Plain: true));
+        _buttons.Add(new UiButton("folder", new Rectangle(copyPanel.X + sizeW + copyBtnW + gap, y + pad, b, b),
+            ChooseFolder, () => false, DrawFolderIcon));
 
         // Képarány-menü a méretkijelző fölött (vagy alatt, ha fölötte nincs hely)
         if (_ratioMenuOpen)
@@ -1511,8 +1511,85 @@ internal sealed class FreezeForm : Form
         using (var path = Ui.Rounded(r, r.Height / 2f))
         using (var bb = new SolidBrush(Color.FromArgb(c.A, accent)))
             g.FillPath(bb, path);
+        // Tartalom: "Másol [vágólap] & Ment [floppy]" – középre igazítva
         using var font = new Font("Segoe UI Semibold", 14 * S, GraphicsUnit.Pixel);
-        TextRenderer.DrawText(g, "Másolás", font, r, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        using var ampFont = new Font("Segoe UI", 14 * S, GraphicsUnit.Pixel);
+        var flags = TextFormatFlags.NoPadding;
+        int wCopy = TextRenderer.MeasureText("Másol", font, Size.Empty, flags).Width;
+        int wSave = TextRenderer.MeasureText("Ment", font, Size.Empty, flags).Width;
+        int wAmp = TextRenderer.MeasureText("&", ampFont, Size.Empty, flags | TextFormatFlags.NoPrefix).Width;
+        float icon = 18 * S, iconGap = 5 * S, ampGap = 8 * S;
+        float contentW = wCopy + iconGap + icon + ampGap + wAmp + ampGap + wSave + iconGap + icon;
+        float x = r.X + (r.Width - contentW) / 2, cy = r.Y + r.Height / 2f;
+        int ty = (int)(cy - font.Height / 2f);
+        var white = Color.FromArgb(c.A, Color.White);
+
+        TextRenderer.DrawText(g, "Másol", font, new Point((int)x, ty), Color.White, flags);
+        x += wCopy + iconGap;
+        DrawClipboardGlyph(g, new RectangleF(x, cy - icon / 2, icon, icon), white);
+        x += icon + ampGap;
+        TextRenderer.DrawText(g, "&", ampFont, new Point((int)x, ty), Color.FromArgb(215, 215, 245), flags | TextFormatFlags.NoPrefix);
+        x += wAmp + ampGap;
+        TextRenderer.DrawText(g, "Ment", font, new Point((int)x, ty), Color.White, flags);
+        x += wSave + iconGap;
+        DrawFloppyGlyph(g, new RectangleF(x, cy - icon / 2, icon, icon), white);
+    }
+
+    /// <summary>
+    /// Másolás ikon (a kódblokkok másolás gombjáról ismert forma):
+    /// két egymásra csúsztatott lekerekített lap, a hátsóból csak a bal felső sarok látszik.
+    /// 24-es rácson rajzolva, az ikon dobozára méretezve.
+    /// </summary>
+    private void DrawClipboardGlyph(Graphics g, RectangleF r, Color c)
+    {
+        float u = r.Width / 20f;                       // a 2..22 tartomány kitölti a dobozt
+        float ox = r.Left - 2 * u, oy = r.Top - 2 * u;
+        PointF P(float x, float y) => new(ox + x * u, oy + y * u);
+        RectangleF R(float x, float y, float w, float h) => new(ox + x * u, oy + y * u, w * u, h * u);
+
+        using var pen = new Pen(c, 1.7f * S) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+
+        // Elülső lap: x=8, y=8, 14×14, sarok 2
+        using (var front = Ui.Rounded(R(8, 8, 14, 14), 2 * u)) g.DrawPath(pen, front);
+
+        // Hátsó lap: csak a látható bal-felső "L" rész
+        using var back = new GraphicsPath();
+        back.AddArc(R(2, 12, 4, 4), 90, 90);           // (4,16) → (2,14)
+        back.AddLine(P(2, 14), P(2, 4));
+        back.AddArc(R(2, 2, 4, 4), 180, 90);           // (2,4) → (4,2)
+        back.AddLine(P(4, 2), P(14, 2));
+        back.AddArc(R(12, 2, 4, 4), 270, 90);          // (14,2) → (16,4)
+        g.DrawPath(pen, back);
+    }
+
+    /// <summary>Floppy: lekerekített, jobb felső sarkán levágott test, fent kitöltött zár, lent címke.</summary>
+    private void DrawFloppyGlyph(Graphics g, RectangleF r, Color c)
+    {
+        using var pen = new Pen(c, 1.6f * S) { LineJoin = LineJoin.Round };
+        var body = RectangleF.Inflate(r, -r.Width * 0.06f, -r.Height * 0.06f);
+        float cut = body.Width * 0.24f, rad = 2 * S;
+
+        using (var path = new GraphicsPath())
+        {
+            path.AddArc(body.Left, body.Top, rad * 2, rad * 2, 180, 90);
+            path.AddLine(body.Left + rad, body.Top, body.Right - cut, body.Top);
+            path.AddLine(body.Right - cut, body.Top, body.Right, body.Top + cut);
+            path.AddLine(body.Right, body.Top + cut, body.Right, body.Bottom - rad);
+            path.AddArc(body.Right - rad * 2, body.Bottom - rad * 2, rad * 2, rad * 2, 0, 90);
+            path.AddArc(body.Left, body.Bottom - rad * 2, rad * 2, rad * 2, 90, 90);
+            path.CloseFigure();
+            g.DrawPath(pen, path);
+        }
+
+        // Fém zár fent (kitöltve, rajta rés)
+        var shutter = RectangleF.FromLTRB(body.Left + body.Width * 0.24f, body.Top, body.Right - body.Width * 0.32f, body.Top + body.Height * 0.32f);
+        using (var br = new SolidBrush(c)) g.FillRectangle(br, shutter);
+        using (var slot = new SolidBrush(Ui.Accent))
+            g.FillRectangle(slot, shutter.Right - shutter.Width * 0.38f, shutter.Top + shutter.Height * 0.2f, shutter.Width * 0.2f, shutter.Height * 0.6f);
+
+        // Címke lent
+        var lbl = RectangleF.FromLTRB(body.Left + body.Width * 0.2f, body.Top + body.Height * 0.56f, body.Right - body.Width * 0.2f, body.Bottom);
+        using (var p = Ui.Rounded(lbl, 1.2f * S)) g.DrawPath(pen, p);
     }
 
     private void DrawSwatch(Graphics g, Rectangle r, Color col, int a)

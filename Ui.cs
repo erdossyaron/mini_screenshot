@@ -120,6 +120,8 @@ internal sealed class ToastForm : FloatingForm
     private readonly string _file;
     private readonly Rectangle _thumbRect;
     private readonly System.Windows.Forms.Timer _life = new() { Interval = 2200 };
+    private readonly Rectangle _closeRect;
+    private bool _closeHover;
 
     private ToastForm(System.Windows.Forms.Screen screen, Bitmap shot, string file) : base(screen.Bounds)
     {
@@ -136,7 +138,9 @@ internal sealed class ToastForm : FloatingForm
         shot.Dispose();
 
         _thumbRect = new Rectangle(pad, pad, tw, th);
-        var size = new Size(tw + pad * 2, th + pad + (int)(34 * S));
+        int rowH = (int)(34 * S), xs = (int)(24 * S);
+        _closeRect = new Rectangle(pad + tw - xs, th + pad + (rowH - xs) / 2, xs, xs);   // X a szövegsor jobb szélén
+        var size = new Size(tw + pad * 2, th + pad + rowH);
         var wa = screen.WorkingArea;
         int m = (int)(20 * S);
         Bounds = new Rectangle(wa.Right - size.Width - m, wa.Bottom - size.Height - m, size.Width, size.Height);
@@ -163,11 +167,22 @@ internal sealed class ToastForm : FloatingForm
 
     // Egér fölötte: nem tűnik el
     protected override void OnMouseEnter(EventArgs e) => _life.Stop();
-    protected override void OnMouseLeave(EventArgs e) => _life.Start();
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _life.Start();
+        if (_closeHover) { _closeHover = false; Invalidate(); }
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        bool over = _closeRect.Contains(e.Location);
+        if (over != _closeHover) { _closeHover = over; Invalidate(); }
+    }
 
     protected override void OnMouseUp(MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Left)
+        // X: csak bezár; máshol bal klikk: megmutatja a fájlt az Intézőben
+        if (e.Button == MouseButtons.Left && !_closeRect.Contains(e.Location))
             System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{_file}\"");
         FadeClose();
     }
@@ -189,9 +204,21 @@ internal sealed class ToastForm : FloatingForm
         using var dot = new SolidBrush(Ui.Accent);
         float d = 7 * S;
         g.FillEllipse(dot, row.X + 2 * S, row.Y + (row.Height - d) / 2, d, d);
-        TextRenderer.DrawText(g, "Mentve · vágólapon", font,
+        // A gomb ("Másol & Ment") párja; NoPrefix nélkül az "&" aláhúzásjelként tűnne el
+        TextRenderer.DrawText(g, "Másolva & mentve", font,
             new Rectangle(row.X + (int)(16 * S), row.Y, row.Width, row.Height), Ui.Text,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+        // Bezáró X; lebegéskor kör alakú kiemelés
+        if (_closeHover)
+        {
+            using var hb = new SolidBrush(Ui.BgHover);
+            g.FillEllipse(hb, _closeRect);
+        }
+        float cx = _closeRect.X + _closeRect.Width / 2f, cy = _closeRect.Y + _closeRect.Height / 2f, k = 4.5f * S;
+        using var xp = new Pen(_closeHover ? Ui.Text : Ui.Muted, 1.6f * S) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        g.DrawLine(xp, cx - k, cy - k, cx + k, cy + k);
+        g.DrawLine(xp, cx - k, cy + k, cx + k, cy - k);
     }
 
     protected override void Dispose(bool disposing)

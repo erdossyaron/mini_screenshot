@@ -13,7 +13,7 @@ Az első indításkor az app:
 - átmásolja magát ide: `%LOCALAPPDATA%\Programs\mini_screenshot\Screen.exe`. Így a letöltött fájl nyugodtan törölhető.
 - bekapcsolja, hogy **a Windows indulásakor automatikusan elinduljon**.
 
-A mentési mappát később is módosíthatod. Kattints a Másolás gomb melletti **mappa ikonra**, vagy a tálcaikonon jobb gombbal válaszd a **Mentési mappa…** pontot. A mappa ikon fölé állva látod, éppen hova ment.
+A mentési mappát később is módosíthatod. Kattints a **Másol & Ment** gomb melletti **mappa ikonra**, vagy a tálcaikonon jobb gombbal válaszd a **Mentési mappa…** pontot. A mappa ikon fölé állva látod, éppen hova ment.
 
 Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-zal** ponttal kapcsolhatod ki és be. Ha kikapcsolod, az app nem kapcsolja vissza.
 
@@ -30,19 +30,19 @@ Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-z
 | Képernyő befagyasztása | **PrtSc** |
 | Vágás | húzd a sarkokat vagy az éleket, vagy kattints kétszer a két sarokpontra |
 | Fix képarány | kattints a méretkijelzőre, és válassz arányt (16:9, 4:3, 1:1 …) |
-| Mentés és vágólap | **Másolás** gomb vagy **Enter** |
+| Vágólapra másolás és mentés | **Másol & Ment** gomb vagy **Enter** |
 | Mégse | **Esc** vagy jobb klikk |
 
-Semmi nem mentődik, amíg a Másolás gombra nem kattintasz. A képek PNG-ként a választott mappába kerülnek, és egyúttal a vágólapra is.
+Semmi nem mentődik, amíg a **Másol & Ment** gombra nem kattintasz. Ekkor a kép egyszerre kerül a vágólapra és PNG-ként a választott mappába. Utána a jobb alsó sarokban megjelenik a „Másolva & mentve” előnézet. Kattints rá, és megnyílik a fájl az Intézőben. Az **X**-szel bezárhatod.
 
-Ha több monitorod van, mindegyik befagy, és annak a kijelzőnek a vágását menti, ahol a Másolás gombra kattintasz.
+Ha több monitorod van, mindegyik befagy, és annak a kijelzőnek a vágását menti, ahol a gombra kattintasz.
 
 ### Eszközök
 
 | Eszköz | Billentyű | Megjegyzés |
 |---|---|---|
 | Vágás | C | alapértelmezett |
-| Elmosás | B | a téglalap alatti rész olvashatatlan lesz |
+| Elmosás | B | a téglalap alatti rész olvashatatlan lesz; inverz módban minden el van mosva, csak a téglalap éles (fókusz) |
 | Ovál | O | Shift: kör |
 | Téglalap | R | Shift: négyzet |
 | Vonal / nyíl | L | nyíl az elején vagy a végén, irány cseréje, Shift: 45° |
