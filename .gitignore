@@ -1,0 +1,10 @@
+# Fordítási kimenet
+bin/
+obj/
+publish/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
