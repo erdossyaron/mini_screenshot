@@ -11,6 +11,7 @@ internal sealed class Annotation
     public Point A, B;                       // kezdő- és végpont (alakzat, vonal, elmosás)
     public readonly List<Point> Points = new();  // ceruza pontjai
     public bool ArrowStart, ArrowEnd;
+    public bool Inverse;             // elmosás: inverz = minden el van mosva, csak a téglalap éles (fókusz)
 
     // Szöveg
     public string Text = "";

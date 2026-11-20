@@ -77,6 +77,8 @@ internal sealed class FreezeForm : Form
     private Color _textBg = Color.Empty;
     private int _textBgOpacity = 80;
 
+    private bool _blurInverse;   // elmosás eszköz: inverz (fókusz) mód
+
     // Tiltott szöveg színe (a TextRenderer nem kezel átlátszóságot, ezért tömör szürke)
     private static readonly Color DisabledText = Color.FromArgb(78, 78, 86);
     private static readonly Graphics Measurer = Graphics.FromImage(new Bitmap(1, 1));
@@ -384,6 +386,8 @@ internal sealed class FreezeForm : Form
         "toolText" => "Szöveg  (T)  ·  dupla katt: szerkesztés",
         "fontDown" => "Kisebb betű",
         "fontUp" => "Nagyobb betű",
+        "blurNormal" => "Elmosás a téglalapon belül",
+        "blurInverse" => "Inverz: minden elmosva, csak a téglalap éles",
         "bg0" => "Nincs háttér",
         "bg1" => "Fehér háttér",
         "bg2" => "Fekete háttér",
@@ -441,6 +445,15 @@ internal sealed class FreezeForm : Form
             _textBg = a.Background;
             _textBgOpacity = a.BackgroundOpacity;
         }
+        if (a.Kind == Tool.Blur) _blurInverse = a.Inverse;
+        Invalidate();
+    }
+
+    /// <summary>Elmosás módja: normál (a téglalap mosódik) vagy inverz (a téglalap éles, a többi mosódik).</summary>
+    private void SetBlurInverse(bool inverse)
+    {
+        _blurInverse = inverse;
+        if (_selected?.Kind == Tool.Blur) _selected.Inverse = inverse;
         Invalidate();
     }
 
@@ -745,6 +758,7 @@ internal sealed class FreezeForm : Form
                 ArrowStart = _arrowStart, ArrowEnd = _arrowEnd,
                 FontSize = _fontSize, ManualSize = _tool == Tool.Text,   // húzott szövegdoboz: fix méret
                 Background = _textBg, BackgroundOpacity = _textBgOpacity,
+                Inverse = _tool == Tool.Blur && _blurInverse,
             };
             if (_tool == Tool.Pen) _drawing.Points.Add(_start);
         }
@@ -983,6 +997,16 @@ internal sealed class FreezeForm : Form
     {
         if (a.Kind == Tool.Blur)
         {
+            if (a.Inverse)
+            {
+                // Inverz (fókusz): a vágáson belül minden el van mosva, kivéve a téglalapot
+                var state = g.Save();
+                g.SetClip(_sel);
+                g.ExcludeClip(a.Box);
+                g.DrawImage(EnsureBlurred(), _sel, _sel, GraphicsUnit.Pixel);
+                g.Restore(state);
+                return;
+            }
             var r = Rectangle.Intersect(a.Box, _full);
             if (r.Width <= 0 || r.Height <= 0) return;
             g.DrawImage(EnsureBlurred(), r, r, GraphicsUnit.Pixel);
@@ -1191,13 +1215,14 @@ internal sealed class FreezeForm : Form
         // Eszközök panel
         _panels.Add(new Rectangle(x, y, toolsW, h));
         int cx = x + pad;
-        Rectangle lineBtn = default, textBtn = default;
+        Rectangle lineBtn = default, textBtn = default, blurBtn = default;
         foreach (var tool in Tools)
         {
             var t = tool;
             var r = new Rectangle(cx, y + pad, b, b);
             if (t == Tool.Line) lineBtn = r;
             if (t == Tool.Text) textBtn = r;
+            if (t == Tool.Blur) blurBtn = r;
             _buttons.Add(new UiButton("tool" + t, r, () => SetTool(t), () => _tool == t, (g, rr, c) => DrawToolIcon(g, t, rr, c)));
             cx += b + gap;
         }
@@ -1254,6 +1279,20 @@ internal sealed class FreezeForm : Form
                     (g, r, c) => DrawText(g, name, r, c, 12)));
                 rx += widths[i] + gap;
             }
+        }
+
+        // Elmosás panel: [normál] [inverz / fókusz]
+        if (_tool == Tool.Blur)
+        {
+            int pw = pad * 2 + b * 2 + gap;
+            int py = y - h - (int)(8 * S);
+            if (py < outer) py = y + h + (int)(8 * S);
+            int px = Math.Clamp(blurBtn.X + b / 2 - pw / 2, outer, Math.Max(outer, _full.Width - pw - outer));
+            _panels.Add(new Rectangle(px, py, pw, h));
+            _buttons.Add(new UiButton("blurNormal", new Rectangle(px + pad, py + pad, b, b),
+                () => SetBlurInverse(false), () => !_blurInverse, (g, r, c) => DrawBlurModeIcon(g, r, c, false)));
+            _buttons.Add(new UiButton("blurInverse", new Rectangle(px + pad + b + gap, py + pad, b, b),
+                () => SetBlurInverse(true), () => _blurInverse, (g, r, c) => DrawBlurModeIcon(g, r, c, true)));
         }
 
         // Szöveg panel: [A méret A] | [nincs · fehér · fekete · sárga háttér] | [− fedés% +]
@@ -1403,6 +1442,32 @@ internal sealed class FreezeForm : Form
             using var pen = new Pen(Color.FromArgb(active ? a : a * 110 / 255, Color.White), 1.6f * S);
             g.DrawPath(pen, rp);
         }
+    }
+
+    /// <summary>
+    /// Elmosás mód ikonja. Normál: keret, benne mozaik.
+    /// Inverz: mozaik körben, a közepén üres (éles) téglalap.
+    /// </summary>
+    private void DrawBlurModeIcon(Graphics g, Rectangle r, Color c, bool inverse)
+    {
+        var outer = RectangleF.Inflate(r, -8 * S, -8 * S);
+        var inner = RectangleF.Inflate(outer, -outer.Width * 0.24f, -outer.Height * 0.24f);
+        using var pen = new Pen(c, 1.4f * S);
+
+        // Mozaikminta 4×4 cellában; normálnál csak belül, inverznél csak a belső téglalapon kívül
+        float[] shade = { 0.9f, 0.4f, 0.7f, 0.35f, 0.5f, 0.85f, 0.3f, 0.75f, 0.8f, 0.3f, 0.9f, 0.45f, 0.4f, 0.7f, 0.5f, 0.9f };
+        var area = inverse ? outer : inner;
+        float cw = area.Width / 4, ch = area.Height / 4;
+        for (int i = 0; i < 16; i++)
+        {
+            var cell = new RectangleF(area.X + (i % 4) * cw, area.Y + (i / 4) * ch, cw, ch);
+            if (inverse && inner.IntersectsWith(RectangleF.Inflate(cell, -0.5f, -0.5f))) continue;
+            using var br = new SolidBrush(Color.FromArgb((int)(c.A * shade[i] * 0.85f), c));
+            g.FillRectangle(br, cell);
+        }
+
+        using (var p1 = Ui.Rounded(outer, 2 * S)) g.DrawPath(pen, p1);
+        if (inverse) using (var p2 = Ui.Rounded(inner, 1.5f * S)) g.DrawPath(pen, p2);
     }
 
     private void DrawCopyButton(Graphics g, Rectangle r, Color c)

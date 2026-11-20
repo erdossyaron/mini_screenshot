@@ -5,6 +5,18 @@ namespace Screen;
 
 internal static class Program
 {
+    /// <summary>Állandó telepítési hely: %LOCALAPPDATA%\Programs\mini_screenshot\Screen.exe</summary>
+    public static string InstallPath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "mini_screenshot", "Screen.exe");
+
+    /// <summary>
+    /// Egyfájlos (kiadott) exe fut-e. A fejlesztői build (bin\Release) nem telepíti magát,
+    /// és nem kapcsol be automatikus indulást.
+    /// </summary>
+#pragma warning disable IL3000 // szándékos: egyfájlos exe-ben üres a Location, ebből ismerjük fel
+    public static bool IsPublishedExe => string.IsNullOrEmpty(typeof(Program).Assembly.Location);
+#pragma warning restore IL3000
+
     [STAThread]
     private static void Main()
     {
@@ -12,10 +24,36 @@ internal static class Program
         using var mutex = new Mutex(true, "Screen.PrtSc.SingleInstance", out bool first);
         if (!first) return;
 
+        // Letöltött helyről (pl. Letöltések) indítva: átmásolja magát az állandó helyre, és onnan indul újra.
+        // Így ha a letöltött fájlt később törlik, az automatikus indulás akkor is működik.
+        if (IsPublishedExe && TrySelfInstall())
+        {
+            mutex.ReleaseMutex();
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(InstallPath) { UseShellExecute = true });
+            return;
+        }
+
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new TrayContext());
+    }
+
+    /// <summary>true, ha átmásolta magát és az új helyről kell indulni.</summary>
+    private static bool TrySelfInstall()
+    {
+        try
+        {
+            string current = Path.GetFullPath(Environment.ProcessPath!);
+            if (string.Equals(current, Path.GetFullPath(InstallPath), StringComparison.OrdinalIgnoreCase)) return false;
+            Directory.CreateDirectory(Path.GetDirectoryName(InstallPath)!);
+            File.Copy(current, InstallPath, overwrite: true);   // újabb verzió letöltésekor frissít
+            return true;
+        }
+        catch
+        {
+            return false;   // ha nem sikerül, a helyén fut tovább
+        }
     }
 }
 
@@ -37,6 +75,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         _ui.CreateControl();
         Directory.CreateDirectory(SaveFolder);
+        bool firstRun = InitAutostart();
 
         var autostart = new ToolStripMenuItem("Indítás a Windows-zal") { Checked = IsAutostart(), CheckOnClick = true };
         autostart.CheckedChanged += (_, _) => SetAutostart(autostart.Checked);
@@ -58,6 +97,44 @@ internal sealed class TrayContext : ApplicationContext
         _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Trigger(); };
 
         _hook = new KeyboardHook(() => _ui.BeginInvoke(Trigger), OnGlobalKey);
+
+        // Első indításkor jelezzük, hogy az app a háttérben fut
+        if (firstRun)
+            _tray.ShowBalloonTip(6000, "Screen fut a háttérben",
+                "Nyomd meg a PrtSc gombot a képernyőkép készítéséhez. A Windows indulásakor automatikusan elindul.",
+                ToolTipIcon.Info);
+    }
+
+    private const string SettingsKey = @"Software\mini_screenshot";
+
+    /// <summary>
+    /// Automatikus indulás: első futáskor bekapcsolja (csak a kiadott exe-nél).
+    /// Ha a felhasználó később kikapcsolja a menüben, nem kapcsoljuk vissza.
+    /// Ha be van kapcsolva, a bejegyzés mindig az aktuális exe-re mutat.
+    /// Visszaadja, hogy ez volt-e az első indítás.
+    /// </summary>
+    private static bool InitAutostart()
+    {
+        if (!Program.IsPublishedExe) return false;
+        try
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(SettingsKey);
+            bool first = k.GetValue("AutostartInitialized") == null;
+            if (first)
+            {
+                SetAutostart(true);
+                k.SetValue("AutostartInitialized", 1, RegistryValueKind.DWord);
+            }
+            else if (IsAutostart())
+            {
+                SetAutostart(true);   // útvonal frissítése, ha az exe máshova került
+            }
+            return first;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

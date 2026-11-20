@@ -5,10 +5,18 @@ Minimalista képernyőkép-készítő Windowsra. A háttérben fut, és a **PrtS
 ## Letöltés és indítás
 
 1. Töltsd le a `Screen.exe`-t a [Releases](https://github.com/erdossyaron/mini_screenshot/releases) oldalról.
-2. Indítsd el. Nem kell telepíteni, és .NET sem kell hozzá.
-3. A tálcán, az óra mellett megjelenik egy kis ikon. Innentől a PrtSc gomb ezt az appot indítja.
+2. Indítsd el egyszer. Ennyi a telepítés, .NET sem kell hozzá.
+3. Az óra mellett megjelenik egy kis ikon és egy értesítés. Innentől a PrtSc gomb ezt az appot indítja.
 
-Ha azt szeretnéd, hogy a Windows-zal együtt induljon, kattints jobb gombbal a tálcaikonra, és pipáld be az **Indítás a Windows-zal** pontot.
+Az első indításkor az app:
+- átmásolja magát ide: `%LOCALAPPDATA%\Programs\mini_screenshot\Screen.exe`. Így a letöltött fájl nyugodtan törölhető.
+- bekapcsolja, hogy **a Windows indulásakor automatikusan elinduljon**.
+
+Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-zal** ponttal kapcsolhatod ki és be. Ha kikapcsolod, az app nem kapcsolja vissza.
+
+**Frissítés:** töltsd le az új `Screen.exe`-t, lépj ki a régiből (tálcaikon → Kilépés), és indítsd el az újat.
+
+**Eltávolítás:** tálcaikon → vedd ki a pipát az **Indítás a Windows-zal** elől → Kilépés. Utána töröld a `%LOCALAPPDATA%\Programs\mini_screenshot` mappát.
 
 > A Windows első indításkor figyelmeztethet („A Windows megvédte a számítógépét”), mert az exe nincs digitálisan aláírva. Ilyenkor kattints a **További információ**, majd a **Futtatás mindenképp** gombra.
 
