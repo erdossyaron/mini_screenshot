@@ -9,8 +9,11 @@ Minimalista képernyőkép-készítő Windowsra. A háttérben fut, és a **PrtS
 3. Az óra mellett megjelenik egy kis ikon és egy értesítés. Innentől a PrtSc gomb ezt az appot indítja.
 
 Az első indításkor az app:
+- megkérdezi, **hova mentse a képeket**. Ha nem választasz, ide menti: `Képek\Képernyőképek`.
 - átmásolja magát ide: `%LOCALAPPDATA%\Programs\mini_screenshot\Screen.exe`. Így a letöltött fájl nyugodtan törölhető.
 - bekapcsolja, hogy **a Windows indulásakor automatikusan elinduljon**.
+
+A mentési mappát később is módosíthatod. Kattints a Másolás gomb melletti **mappa ikonra**, vagy a tálcaikonon jobb gombbal válaszd a **Mentési mappa…** pontot. A mappa ikon fölé állva látod, éppen hova ment.
 
 Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-zal** ponttal kapcsolhatod ki és be. Ha kikapcsolod, az app nem kapcsolja vissza.
 
@@ -30,7 +33,7 @@ Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-z
 | Mentés és vágólap | **Másolás** gomb vagy **Enter** |
 | Mégse | **Esc** vagy jobb klikk |
 
-Semmi nem mentődik, amíg a Másolás gombra nem kattintasz. A képek PNG-ként ide kerülnek: `Képek\Képernyőképek`. Ugyanakkor a vágólapra is felkerülnek.
+Semmi nem mentődik, amíg a Másolás gombra nem kattintasz. A képek PNG-ként a választott mappába kerülnek, és egyúttal a vágólapra is.
 
 Ha több monitorod van, mindegyik befagy, és annak a kijelzőnek a vágását menti, ahol a Másolás gombra kattintasz.
 

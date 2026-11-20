@@ -403,6 +403,7 @@ internal sealed class FreezeForm : Form
         "arrowEnd" => "Nyíl a végén",
         "size" => "Képarány",
         "copy" => "Mentés és vágólap  (Enter)",
+        "folder" => "Mentési mappa:  " + Settings.SaveFolder,
         _ when id.StartsWith("color") => null,
         _ => null,
     };
@@ -1202,7 +1203,7 @@ internal sealed class FreezeForm : Form
         _sizeText = _ratioName != null ? $"{_sel.Width} × {_sel.Height}  ·  {_ratioName}" : $"{_sel.Width} × {_sel.Height}";
         int sizeW = TextRenderer.MeasureText(_sizeText, sizeFont).Width + (int)(22 * S);
         int copyBtnW = (int)(112 * S);
-        int copyW = sizeW + copyBtnW + pad;
+        int copyW = sizeW + b + gap + copyBtnW + pad;   // [méret] [mappa] [Másolás]
         int orderW = pad * 2 + b * 4 + gap * 3;   // rétegsorrend panel
         int total = toolsW + between + orderW + between + copyW;
 
@@ -1257,7 +1258,10 @@ internal sealed class FreezeForm : Form
         _sizeRect = new Rectangle(copyPanel.X + pad, y + pad, sizeW - pad, h - pad * 2);
         _buttons.Add(new UiButton("size", _sizeRect, () => { _ratioMenuOpen = !_ratioMenuOpen; Invalidate(); },
             () => _ratioMenuOpen, DrawSizeLabel));
-        _buttons.Add(new UiButton("copy", new Rectangle(copyPanel.X + sizeW, y + pad, copyBtnW, h - pad * 2),
+        // Mentési mappa a Másolás mellett
+        _buttons.Add(new UiButton("folder", new Rectangle(copyPanel.X + sizeW, y + pad, b, b),
+            ChooseFolder, () => false, DrawFolderIcon));
+        _buttons.Add(new UiButton("copy", new Rectangle(copyPanel.X + sizeW + b + gap, y + pad, copyBtnW, h - pad * 2),
             Confirm, () => false, DrawCopyButton, Plain: true));
 
         // Képarány-menü a méretkijelző fölött (vagy alatt, ha fölötte nincs hely)
@@ -1468,6 +1472,36 @@ internal sealed class FreezeForm : Form
 
         using (var p1 = Ui.Rounded(outer, 2 * S)) g.DrawPath(pen, p1);
         if (inverse) using (var p2 = Ui.Rounded(inner, 1.5f * S)) g.DrawPath(pen, p2);
+    }
+
+    /// <summary>Mentési mappa választása a fagyasztott réteg fölött.</summary>
+    private void ChooseFolder()
+    {
+        StopEditing();
+        _hoverId = null;
+        Settings.ChooseSaveFolder(this);
+        Activate();   // vissza a fókusz a rétegre (Esc, Enter, gyorsbillentyűk)
+        Invalidate();
+    }
+
+    /// <summary>Mappa ikon: fül a bal felső sarkon, lekerekített test.</summary>
+    private void DrawFolderIcon(Graphics g, Rectangle r, Color c)
+    {
+        var ib = RectangleF.Inflate(r, -9.5f * S, -10.5f * S);
+        float tabW = ib.Width * 0.42f, tabH = 2.6f * S, rad = 1.8f * S;
+        using var pen = new Pen(c, 1.6f * S) { LineJoin = LineJoin.Round };
+        using var path = new GraphicsPath();
+        path.AddLine(ib.Left, ib.Bottom - rad, ib.Left, ib.Top + rad);
+        path.AddArc(ib.Left, ib.Top, rad * 2, rad * 2, 180, 90);
+        path.AddLine(ib.Left + rad, ib.Top, ib.Left + tabW, ib.Top);
+        path.AddLine(ib.Left + tabW + tabH, ib.Top + tabH, ib.Right - rad, ib.Top + tabH);
+        path.AddArc(ib.Right - rad * 2, ib.Top + tabH, rad * 2, rad * 2, 270, 90);
+        path.AddLine(ib.Right, ib.Top + tabH + rad, ib.Right, ib.Bottom - rad);
+        path.AddArc(ib.Right - rad * 2, ib.Bottom - rad * 2, rad * 2, rad * 2, 0, 90);
+        path.AddLine(ib.Right - rad, ib.Bottom, ib.Left + rad, ib.Bottom);
+        path.AddArc(ib.Left, ib.Bottom - rad * 2, rad * 2, rad * 2, 90, 90);
+        path.CloseFigure();
+        g.DrawPath(pen, path);
     }
 
     private void DrawCopyButton(Graphics g, Rectangle r, Color c)

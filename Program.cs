@@ -68,14 +68,17 @@ internal sealed class TrayContext : ApplicationContext
     private readonly Control _ui = new();          // UI-szálra visszaküldéshez
     private readonly List<FreezeForm> _overlays = new();
 
-    public static string SaveFolder { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Képernyőképek");
+    public static string SaveFolder => Settings.SaveFolder;
 
     public TrayContext()
     {
         _ui.CreateControl();
-        Directory.CreateDirectory(SaveFolder);
         bool firstRun = InitAutostart();
+        // Telepítéskor (első indítás): a felhasználó megadja, hova mentődjenek a képek
+        if (firstRun)
+            Settings.ChooseSaveFolder(null,
+                "Hova mentse a képeket? Később a Másolás gomb melletti mappa ikonnal módosítható.");
+        TryCreateFolder(SaveFolder);
 
         var autostart = new ToolStripMenuItem("Indítás a Windows-zal") { Checked = IsAutostart(), CheckOnClick = true };
         autostart.CheckedChanged += (_, _) => SetAutostart(autostart.Checked);
@@ -83,6 +86,7 @@ internal sealed class TrayContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add("Kép készítése", null, (_, _) => Trigger());
         menu.Items.Add("Mappa megnyitása", null, (_, _) => OpenFolder());
+        menu.Items.Add("Mentési mappa…", null, (_, _) => Settings.ChooseSaveFolder(null));
         menu.Items.Add(autostart);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Kilépés", null, (_, _) => ExitThread());
@@ -143,6 +147,7 @@ internal sealed class TrayContext : ApplicationContext
     /// </summary>
     private void Trigger()
     {
+        if (Settings.DialogOpen) return;                         // mappaválasztó nyitva: ne zavarjuk
         if (_overlays.Count > 0) { CloseOverlays(); return; }   // második PrtSc = mégse
 
         // Előbb az összes kijelzőt fotózzuk, csak utána jelenik meg bármi
@@ -197,7 +202,7 @@ internal sealed class TrayContext : ApplicationContext
     /// </summary>
     private bool OnGlobalKey(int vk)
     {
-        if (_overlays.Count == 0) return false;
+        if (_overlays.Count == 0 || Settings.DialogOpen) return false;   // a mappaválasztóé az Esc/Enter
         // Gépelés közben az Esc és az Enter a szövegé (Esc: gépelés vége, Enter: új sor)
         if (_overlays.Any(o => o.IsEditingText)) return false;
         const int VK_RETURN = 0x0D, VK_ESCAPE = 0x1B;
@@ -222,6 +227,7 @@ internal sealed class TrayContext : ApplicationContext
         var screen = source.TargetScreen;
         CloseOverlays();
 
+        TryCreateFolder(SaveFolder);   // ha közben törölték
         string file = Path.Combine(SaveFolder, $"kep_{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}.png");
         crop.Save(file, System.Drawing.Imaging.ImageFormat.Png);
         CopyToClipboard(crop);
@@ -255,6 +261,11 @@ internal sealed class TrayContext : ApplicationContext
             try { Clipboard.SetDataObject(data, true); return; }
             catch (System.Runtime.InteropServices.ExternalException) { Thread.Sleep(50); }
         }
+    }
+
+    private static void TryCreateFolder(string path)
+    {
+        try { Directory.CreateDirectory(path); } catch { /* pl. leválasztott meghajtó: mentéskor derül ki */ }
     }
 
     private static void OpenFolder() =>
