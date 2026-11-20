@@ -36,6 +36,40 @@ internal static class Settings
         }
     }
 
+    // ---------- Automatikus indulás (HKCU\...\Run) ----------
+
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string RunName = "ScreenPrtSc";
+
+    public static bool IsAutostart()
+    {
+        using var k = Registry.CurrentUser.OpenSubKey(RunKey);
+        return k?.GetValue(RunName) != null;
+    }
+
+    public static void SetAutostart(bool on, string exePath)
+    {
+        using var k = Registry.CurrentUser.CreateSubKey(RunKey);
+        if (on) k.SetValue(RunName, $"\"{exePath}\"");
+        else k.DeleteValue(RunName, false);
+    }
+
+    /// <summary>A telepítő már beállította az automatikus indulást (a felhasználó döntése érvényes).</summary>
+    public static bool AutostartInitialized
+    {
+        get
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(Key);
+            return k?.GetValue("AutostartInitialized") != null;
+        }
+        set
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(Key);
+            if (value) k.SetValue("AutostartInitialized", 1, RegistryValueKind.DWord);
+            else k.DeleteValue("AutostartInitialized", false);
+        }
+    }
+
     /// <summary>
     /// Mappaválasztó ablak. Ha a felhasználó választ, elmenti és true-t ad vissza.
     /// Az owner a fagyasztott réteg, hogy a választó fölötte jelenjen meg.

@@ -4,20 +4,21 @@ Minimalista képernyőkép-készítő Windowsra. A háttérben fut, és a **PrtS
 
 ## Letöltés és indítás
 
-1. Töltsd le a `Screen.exe`-t a [Releases](https://github.com/erdossyaron/mini_screenshot/releases) oldalról.
-2. Indítsd el egyszer. Ennyi a telepítés, .NET sem kell hozzá.
-3. Az óra mellett megjelenik egy kis ikon és egy értesítés. Innentől a PrtSc gomb ezt az appot indítja.
+1. Töltsd le a `Screen.exe`-t a [Releases](https://github.com/erdossyaron/mini_screenshot/releases) oldalról. Csak ez az egy fájl kell, .NET sem.
+2. Indítsd el. Feljön a **telepítő varázsló**:
+   - **Hova mentse a képeket?** Alapból: `Képek\Képernyőképek`. A **Tallózás…** gombbal másikat választhatsz.
+   - **Indítás a Windows-zal:** alapból be van kapcsolva.
+3. Kattints a **Telepítés** gombra. Az óra mellett megjelenik egy kis ikon és egy értesítés. Innentől a PrtSc gomb ezt az appot indítja.
 
-Az első indításkor az app:
-- megkérdezi, **hova mentse a képeket**. Ha nem választasz, ide menti: `Képek\Képernyőképek`.
-- átmásolja magát ide: `%LOCALAPPDATA%\Programs\mini_screenshot\Screen.exe`. Így a letöltött fájl nyugodtan törölhető.
-- bekapcsolja, hogy **a Windows indulásakor automatikusan elinduljon**.
+A telepítő az appot ide másolja: `%LOCALAPPDATA%\Programs\mini_screenshot\Screen.exe`. A letöltött fájl ezután nyugodtan törölhető. Rendszergazdai jog nem kell.
+
+Ha az app már fut, és újra elindítod, egy értesítés jelzi, hogy már fut.
 
 A mentési mappát később is módosíthatod. Kattints a **Másol & Ment** gomb melletti **mappa ikonra**, vagy a tálcaikonon jobb gombbal válaszd a **Mentési mappa…** pontot. A mappa ikon fölé állva látod, éppen hova ment.
 
 Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-zal** ponttal kapcsolhatod ki és be. Ha kikapcsolod, az app nem kapcsolja vissza.
 
-**Frissítés:** töltsd le az új `Screen.exe`-t, lépj ki a régiből (tálcaikon → Kilépés), és indítsd el az újat.
+**Frissítés:** töltsd le az új `Screen.exe`-t, indítsd el, és a varázslóban kattints a **Frissítés** gombra. A futó régi példányt a varázsló maga állítja le és cseréli le.
 
 **Eltávolítás:** tálcaikon → vedd ki a pipát az **Indítás a Windows-zal** elől → Kilépés. Utána töröld a `%LOCALAPPDATA%\Programs\mini_screenshot` mappát.
 

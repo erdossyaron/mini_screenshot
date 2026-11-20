@@ -17,52 +17,101 @@ internal static class Program
     public static bool IsPublishedExe => string.IsNullOrEmpty(typeof(Program).Assembly.Location);
 #pragma warning restore IL3000
 
+    private const string MutexName = "Screen.PrtSc.SingleInstance";
+    public const string ShowEventName = "mini_screenshot.Show";   // "már fut" jelzés a futó példánynak
+    public const string QuitEventName = "mini_screenshot.Quit";   // kilépés kérése (frissítéskor)
+
+    private static bool RunsFromInstallPath => string.Equals(
+        Path.GetFullPath(Environment.ProcessPath!), Path.GetFullPath(InstallPath), StringComparison.OrdinalIgnoreCase);
+
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
-        // Egyszerre csak egy példány fusson
-        using var mutex = new Mutex(true, "Screen.PrtSc.SingleInstance", out bool first);
-        if (!first) return;
-
-        // Letöltött helyről (pl. Letöltések) indítva: átmásolja magát az állandó helyre, és onnan indul újra.
-        // Így ha a letöltött fájlt később törlik, az automatikus indulás akkor is működik.
-        if (IsPublishedExe && TrySelfInstall())
-        {
-            mutex.ReleaseMutex();
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(InstallPath) { UseShellExecute = true });
-            return;
-        }
-
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new TrayContext());
+
+        // Letöltött exe (nem a telepítési helyről fut): telepítő varázsló
+        if (IsPublishedExe && !RunsFromInstallPath)
+        {
+            RunSetup();
+            return;
+        }
+
+        // Egyszerre csak egy példány fusson. Ha már fut, az mutassa meg magát (értesítés).
+        using var mutex = new Mutex(true, MutexName, out bool first);
+        if (!first)
+        {
+            Signal(ShowEventName);
+            return;
+        }
+
+        Application.Run(new TrayContext(showWelcome: args.Contains("--welcome")));
     }
 
-    /// <summary>true, ha átmásolta magát és az új helyről kell indulni.</summary>
-    private static bool TrySelfInstall()
+    /// <summary>
+    /// Varázsló → futó példány leállítása → exe másolása az állandó helyre →
+    /// beállítások mentése → indítás az új helyről.
+    /// </summary>
+    private static void RunSetup()
+    {
+        using var form = new SetupForm(alreadyInstalled: File.Exists(InstallPath));
+        if (form.ShowDialog() != DialogResult.OK) return;
+
+        try
+        {
+            StopRunningInstance();
+            Directory.CreateDirectory(Path.GetDirectoryName(InstallPath)!);
+            File.Copy(Environment.ProcessPath!, InstallPath, overwrite: true);
+
+            Settings.SaveFolder = form.Folder;
+            try { Directory.CreateDirectory(form.Folder); } catch { /* mentéskor újra próbálja */ }
+            Settings.SetAutostart(form.Autostart, InstallPath);
+            Settings.AutostartInitialized = true;
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(InstallPath, "--welcome") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("A telepítés nem sikerült:\n\n" + ex.Message, "mini_screenshot",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    /// <summary>A futó példányt udvariasan leállítja; ha nem reagál (régi verzió), kilövi.</summary>
+    private static void StopRunningInstance()
+    {
+        Signal(QuitEventName);
+        using var m = new Mutex(false, MutexName);
+        bool released = false;
+        try { released = m.WaitOne(3000); }
+        catch (AbandonedMutexException) { released = true; }
+        if (released) { m.ReleaseMutex(); return; }
+
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName("Screen"))
+        {
+            try
+            {
+                if (p.Id != Environment.ProcessId) { p.Kill(); p.WaitForExit(3000); }
+            }
+            catch { /* nincs jogosultság vagy már kilépett */ }
+        }
+    }
+
+    private static void Signal(string name)
     {
         try
         {
-            string current = Path.GetFullPath(Environment.ProcessPath!);
-            if (string.Equals(current, Path.GetFullPath(InstallPath), StringComparison.OrdinalIgnoreCase)) return false;
-            Directory.CreateDirectory(Path.GetDirectoryName(InstallPath)!);
-            File.Copy(current, InstallPath, overwrite: true);   // újabb verzió letöltésekor frissít
-            return true;
+            using var ev = EventWaitHandle.OpenExisting(name);
+            ev.Set();
         }
-        catch
-        {
-            return false;   // ha nem sikerül, a helyén fut tovább
-        }
+        catch { /* nincs futó példány, vagy régi verzió fut */ }
     }
 }
 
 /// <summary>Háttérben futó alkalmazás: tálcaikon + billentyűhook.</summary>
 internal sealed class TrayContext : ApplicationContext
 {
-    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string AppName = "ScreenPrtSc";
-
     private readonly NotifyIcon _tray;
     private readonly KeyboardHook _hook;
     private readonly Control _ui = new();          // UI-szálra visszaküldéshez
@@ -70,18 +119,17 @@ internal sealed class TrayContext : ApplicationContext
 
     public static string SaveFolder => Settings.SaveFolder;
 
-    public TrayContext()
+    private readonly EventWaitHandle _showEvent = new(false, EventResetMode.AutoReset, Program.ShowEventName);
+    private readonly EventWaitHandle _quitEvent = new(false, EventResetMode.AutoReset, Program.QuitEventName);
+
+    public TrayContext(bool showWelcome)
     {
         _ui.CreateControl();
-        bool firstRun = InitAutostart();
-        // Telepítéskor (első indítás): a felhasználó megadja, hova mentődjenek a képek
-        if (firstRun)
-            Settings.ChooseSaveFolder(null,
-                "Hova mentse a képeket? Később a Másolás gomb melletti mappa ikonnal módosítható.");
+        InitAutostart();
         TryCreateFolder(SaveFolder);
 
-        var autostart = new ToolStripMenuItem("Indítás a Windows-zal") { Checked = IsAutostart(), CheckOnClick = true };
-        autostart.CheckedChanged += (_, _) => SetAutostart(autostart.Checked);
+        var autostart = new ToolStripMenuItem("Indítás a Windows-zal") { Checked = Settings.IsAutostart(), CheckOnClick = true };
+        autostart.CheckedChanged += (_, _) => Settings.SetAutostart(autostart.Checked, Application.ExecutablePath);
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Kép készítése", null, (_, _) => Trigger());
@@ -102,43 +150,41 @@ internal sealed class TrayContext : ApplicationContext
 
         _hook = new KeyboardHook(() => _ui.BeginInvoke(Trigger), OnGlobalKey);
 
-        // Első indításkor jelezzük, hogy az app a háttérben fut
-        if (firstRun)
-            _tray.ShowBalloonTip(6000, "Screen fut a háttérben",
-                "Nyomd meg a PrtSc gombot a képernyőkép készítéséhez. A Windows indulásakor automatikusan elindul.",
-                ToolTipIcon.Info);
+        // Telepítés után: üdvözlő értesítés
+        if (showWelcome) ShowRunningTip("A mini_screenshot fut a háttérben");
+
+        // Másik indítás jelzése ("már fut") és kilépés kérése (frissítéskor)
+        ThreadPool.RegisterWaitForSingleObject(_showEvent,
+            (_, _) => _ui.BeginInvoke(() => ShowRunningTip("A mini_screenshot már fut")), null, -1, false);
+        ThreadPool.RegisterWaitForSingleObject(_quitEvent,
+            (_, _) => _ui.BeginInvoke(ExitThread), null, -1, true);
     }
 
-    private const string SettingsKey = @"Software\mini_screenshot";
+    private void ShowRunningTip(string title) =>
+        _tray.ShowBalloonTip(6000, title,
+            "Nyomd meg a PrtSc gombot a képernyőkép készítéséhez. A tálcaikonon jobb gombbal érheted el a beállításokat.",
+            ToolTipIcon.Info);
 
     /// <summary>
-    /// Automatikus indulás: első futáskor bekapcsolja (csak a kiadott exe-nél).
-    /// Ha a felhasználó később kikapcsolja a menüben, nem kapcsoljuk vissza.
-    /// Ha be van kapcsolva, a bejegyzés mindig az aktuális exe-re mutat.
-    /// Visszaadja, hogy ez volt-e az első indítás.
+    /// Automatikus indulás, ha nem a telepítő állította be (pl. kézzel másolt exe):
+    /// első futáskor bekapcsolja. Ha be van kapcsolva, a bejegyzés az aktuális exe-re mutat.
     /// </summary>
-    private static bool InitAutostart()
+    private static void InitAutostart()
     {
-        if (!Program.IsPublishedExe) return false;
+        if (!Program.IsPublishedExe) return;
         try
         {
-            using var k = Registry.CurrentUser.CreateSubKey(SettingsKey);
-            bool first = k.GetValue("AutostartInitialized") == null;
-            if (first)
+            if (!Settings.AutostartInitialized)
             {
-                SetAutostart(true);
-                k.SetValue("AutostartInitialized", 1, RegistryValueKind.DWord);
+                Settings.SetAutostart(true, Application.ExecutablePath);
+                Settings.AutostartInitialized = true;
             }
-            else if (IsAutostart())
+            else if (Settings.IsAutostart())
             {
-                SetAutostart(true);   // útvonal frissítése, ha az exe máshova került
+                Settings.SetAutostart(true, Application.ExecutablePath);   // útvonal frissítése
             }
-            return first;
         }
-        catch
-        {
-            return false;
-        }
+        catch { /* registry hiba: az app enélkül is működik */ }
     }
 
     /// <summary>
@@ -271,19 +317,6 @@ internal sealed class TrayContext : ApplicationContext
     private static void OpenFolder() =>
         System.Diagnostics.Process.Start("explorer.exe", $"\"{SaveFolder}\"");
 
-    private static bool IsAutostart()
-    {
-        using var k = Registry.CurrentUser.OpenSubKey(RunKey);
-        return k?.GetValue(AppName) != null;
-    }
-
-    private static void SetAutostart(bool on)
-    {
-        using var k = Registry.CurrentUser.OpenSubKey(RunKey, true)!;
-        if (on) k.SetValue(AppName, $"\"{Application.ExecutablePath}\"");
-        else k.DeleteValue(AppName, false);
-    }
-
     /// <summary>Minimalista tálcaikon: lekerekített keret, közepén pont.</summary>
     private static Icon MakeIcon()
     {
@@ -304,6 +337,8 @@ internal sealed class TrayContext : ApplicationContext
         _hook.Dispose();
         _tray.Visible = false;
         _tray.Dispose();
+        _showEvent.Dispose();
+        _quitEvent.Dispose();
         base.ExitThreadCore();
     }
 }
