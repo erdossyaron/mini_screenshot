@@ -194,6 +194,7 @@ internal sealed class TrayContext : ApplicationContext
     private void Trigger()
     {
         if (Settings.DialogOpen) return;                         // mappaválasztó nyitva: ne zavarjuk
+        if (_long != null) { CancelLong(); return; }             // hosszú kép rögzítése közben: mégse
         if (_overlays.Count > 0) { CloseOverlays(); return; }   // második PrtSc = mégse
 
         // Előbb az összes kijelzőt fotózzuk, csak utána jelenik meg bármi
@@ -203,6 +204,7 @@ internal sealed class TrayContext : ApplicationContext
             var f = new FreezeForm(screen, shot);
             f.Confirmed += OnConfirmed;
             f.Cancelled += CloseOverlays;
+            f.LongCaptureRequested += StartLong;
             _overlays.Add(f);
             f.Show();
         }
@@ -210,6 +212,53 @@ internal sealed class TrayContext : ApplicationContext
         // A billentyűzet (Esc, Enter) annál a kijelzőnél legyen, ahol az egér van
         var under = _overlays.FirstOrDefault(o => o.Bounds.Contains(Cursor.Position)) ?? _overlays[0];
         ForceForeground(under);
+    }
+
+    // ================= Hosszú kép (görgetve rögzítés) =================
+
+    private LongCapture? _long;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point p);
+
+    /// <summary>
+    /// "Hosszú kép" gomb: a fagyasztás eltűnik, az app lefelé görgeti a kijelölés alatti ablakot,
+    /// és összefűzi a képet. A végén a görgethető szerkesztőben nyílik meg.
+    /// </summary>
+    private void StartLong(FreezeForm source)
+    {
+        var screen = source.TargetScreen;
+        var sel = source.Selection;
+        CloseOverlays();
+
+        // A görgetés célja: a kijelölés közepe alatti ablak (a fagyasztott réteg már nincs ott)
+        var center = new Point(screen.Bounds.X + sel.X + sel.Width / 2, screen.Bounds.Y + sel.Y + sel.Height / 2);
+        var target = WindowFromPoint(center);
+
+        _long = new LongCapture(screen, sel, target, center);
+        _long.Finished += OnLongFinished;
+        _long.Cancelled += CancelLong;
+        _long.Show();
+    }
+
+    private void OnLongFinished(LongCapture capture, Bitmap longShot)
+    {
+        var screen = capture.TargetScreen;
+        CancelLong();
+        var f = new FreezeForm(screen, longShot, longDoc: true);
+        f.Confirmed += OnConfirmed;
+        f.Cancelled += CloseOverlays;
+        _overlays.Add(f);
+        f.Show();
+        ForceForeground(f);
+    }
+
+    private void CancelLong()
+    {
+        if (_long == null) return;
+        var l = _long;
+        _long = null;
+        l.Close();
+        l.Dispose();
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
@@ -248,10 +297,19 @@ internal sealed class TrayContext : ApplicationContext
     /// </summary>
     private bool OnGlobalKey(int vk)
     {
+        const int VK_RETURN = 0x0D, VK_ESCAPE = 0x1B;
+
+        // Hosszú kép rögzítése közben: Enter = kész, Esc = mégse
+        if (_long != null)
+        {
+            if (vk == VK_ESCAPE) { _ui.BeginInvoke(CancelLong); return true; }
+            if (vk == VK_RETURN) { _ui.BeginInvoke(() => _long?.Finish()); return true; }
+            return false;
+        }
+
         if (_overlays.Count == 0 || Settings.DialogOpen) return false;   // a mappaválasztóé az Esc/Enter
         // Gépelés közben az Esc és az Enter a szövegé (Esc: gépelés vége, Enter: új sor)
         if (_overlays.Any(o => o.IsEditingText)) return false;
-        const int VK_RETURN = 0x0D, VK_ESCAPE = 0x1B;
 
         if (vk == VK_ESCAPE)
         {
@@ -273,9 +331,14 @@ internal sealed class TrayContext : ApplicationContext
         var screen = source.TargetScreen;
         CloseOverlays();
 
-        TryCreateFolder(SaveFolder);   // ha közben törölték
-        string file = Path.Combine(SaveFolder, $"kep_{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}.png");
-        crop.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+        // PNG-mentés csak akkor, ha a Másolás melletti kapcsoló be van kapcsolva
+        string? file = null;
+        if (Settings.SaveEnabled)
+        {
+            TryCreateFolder(SaveFolder);   // ha közben törölték
+            file = Path.Combine(SaveFolder, $"kep_{DateTime.Now:yyyy-MM-dd_HH-mm-ss-fff}.png");
+            crop.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+        }
         CopyToClipboard(crop);
         ToastForm.Show(screen, crop, file);   // a toast veszi át a bitmapet
     }
@@ -334,6 +397,7 @@ internal sealed class TrayContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        CancelLong();
         _hook.Dispose();
         _tray.Visible = false;
         _tray.Dispose();

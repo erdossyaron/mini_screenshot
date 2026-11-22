@@ -31,12 +31,24 @@ Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-z
 | Képernyő befagyasztása | **PrtSc** |
 | Vágás | húzd a sarkokat vagy az éleket, vagy kattints kétszer a két sarokpontra |
 | Fix képarány | kattints a méretkijelzőre, és válassz arányt (16:9, 4:3, 1:1 …) |
-| Vágólapra másolás és mentés | **Másol & Ment** gomb vagy **Enter** |
+| Vágólapra másolás | **Másolás** gomb vagy **Enter** |
+| Mentés PNG-be is | a Másolás melletti **kapcsoló** (floppy ikon) – bekapcsolva a Másolás menti is a képet |
+| Hosszú kép | **Hosszú kép** gomb a méretkijelző mellett (lásd lent) |
+| Visszavonás | **Ctrl+Z** – mindig az utolsó mozzanat (rajzolás, mozgatás, vágás, szín, törlés, gépelés…) |
 | Mégse | **Esc** vagy jobb klikk |
 
-Semmi nem mentődik, amíg a **Másol & Ment** gombra nem kattintasz. Ekkor a kép egyszerre kerül a vágólapra és PNG-ként a választott mappába. Utána a jobb alsó sarokban megjelenik a „Másolva & mentve” előnézet. Kattints rá, és megnyílik a fájl az Intézőben. Az **X**-szel bezárhatod.
+Semmi nem kerül a vágólapra vagy a lemezre, amíg a **Másolás** gombra nem kattintasz. Ha a mentés kapcsoló be van kapcsolva, a kép PNG-ként a választott mappába is mentődik. A kapcsoló állását az app megjegyzi. Utána a jobb alsó sarokban megjelenik egy előnézet: „Másolva & mentve” vagy „Vágólapra másolva”. Mentett képnél rákattintva megnyílik a fájl az Intézőben. Az **X**-szel bezárhatod.
 
 Ha több monitorod van, mindegyik befagy, és annak a kijelzőnek a vágását menti, ahol a gombra kattintasz.
+
+### Hosszú kép (görgetve rögzítés)
+
+1. Jelöld ki a tartalmat, és kattints a **Hosszú kép** gombra.
+2. Az app maga görgeti lefelé a kijelölés alatti ablakot, és összefűzi a képet. Jobb oldalt látszik az előnézet és a magasság.
+3. Az oldal végén magától leáll, vagy a **Kész (Enter)** gombbal te állítod le. **Mégse: Esc.**
+4. A hosszú kép a szerkesztőben nyílik meg: görgővel görgethető, a megszokott vágóval vághatod, és minden eszközzel rajzolhatsz rá.
+
+A rögzített részeket (fejléc, oldalsáv, lebegő beviteli doboz, lábléc) az app felismeri: a fejléc egyszer felül, a lábléc egyszer alul jelenik meg, az oldalsáv csak az első képernyő magasságáig, a görgetett tartalom pedig végig „lefolyik”. Ha valami nem jó, a napló itt van: `%LOCALAPPDATA%\Programs\mini_screenshot\hosszu_kep.log`.
 
 ### Eszközök
 
@@ -49,6 +61,7 @@ Ha több monitorod van, mindegyik befagy, és annak a kijelzőnek a vágását m
 | Vonal / nyíl | L | nyíl az elején vagy a végén, irány cseréje, Shift: 45° |
 | Ceruza | P | szabadkézi vonal |
 | Szöveg | T | betűméret, háttérszín, átlátszóság; dupla katt: szerkesztés |
+| Kéz (kijelölés) | H | kattints egy objektumra: kijelöli, és átvált az eszközére |
 
 A szín piros, fehér vagy fekete lehet.
 
@@ -57,8 +70,8 @@ A szín piros, fehér vagy fekete lehet.
 - A frissen rajzolt vagy kijelölt objektum **bárhol megfogva mozgatható**.
 - A **fehér fogópontokon** méretezhető.
 - **Egy kattintás bárhova** leveszi a fókuszt. Utána húzással új objektumot rajzolsz, kattintással kijelölsz egyet.
-- **Rétegsorrend:** leghátra, hátrébb, előrébb, legelőre.
-- **Delete:** a kijelölt objektum törlése. **Ctrl+Z:** az utolsó objektum visszavonása.
+- A kijelölt objektum mellett egy **kis panel** jelenik meg: rétegsorrend (leghátra, hátrébb, előrébb, legelőre) és törlés.
+- **Delete:** a kijelölt objektum törlése. **Ctrl+Z:** az utolsó mozzanat visszavonása, akár többször is.
 
 ## Fordítás forrásból
 

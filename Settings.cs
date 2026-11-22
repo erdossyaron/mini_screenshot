@@ -36,6 +36,25 @@ internal static class Settings
         }
     }
 
+    /// <summary>Másoláskor PNG-be is mentsen-e (a Másolás melletti kapcsoló). Alapból igen.</summary>
+    public static bool SaveEnabled
+    {
+        get
+        {
+            try
+            {
+                using var k = Registry.CurrentUser.OpenSubKey(Key);
+                return k?.GetValue("SaveEnabled") is not int v || v != 0;
+            }
+            catch { return true; }
+        }
+        set
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(Key);
+            k.SetValue("SaveEnabled", value ? 1 : 0, RegistryValueKind.DWord);
+        }
+    }
+
     // ---------- Automatikus indulás (HKCU\...\Run) ----------
 
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";

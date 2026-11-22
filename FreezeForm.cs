@@ -29,7 +29,7 @@ internal sealed class FreezeForm : Form
     private static readonly Color Red = Color.FromArgb(239, 68, 68);
     private static readonly Color White = Color.White;
     private static readonly Color Black = Color.FromArgb(17, 17, 17);
-    private static readonly Tool[] Tools = { Tool.Crop, Tool.Blur, Tool.Oval, Tool.Rect, Tool.Line, Tool.Pen, Tool.Text };
+    private static readonly Tool[] Tools = { Tool.Crop, Tool.Blur, Tool.Oval, Tool.Rect, Tool.Line, Tool.Pen, Tool.Text, Tool.Hand };
     private static readonly Color[] Palette = { Red, White, Black };
 
     /// <summary>A legnépszerűbb képarányok a méretkijelző menüjében.</summary>
@@ -41,9 +41,22 @@ internal sealed class FreezeForm : Form
 
     private readonly float S;
     private readonly Bitmap _shot;   // eredeti fagyasztott kép
-    private readonly Bitmap _dim;    // sötétített változat a vágáson kívüli részhez
-    private Bitmap? _blurred;        // elmosott változat, első használatkor készül
+    private readonly Bitmap? _dim;   // sötétített változat a vágáson kívüli részhez (hosszú képnél nincs)
+    private Bitmap? _blurSmall;      // erősen kicsinyített kép az elmosáshoz, első használatkor készül
+    private int _blurF;              // kicsinyítés mértéke
     private readonly Rectangle _full;
+
+    // Hosszú (görgetéssel összefűzött) kép: a dokumentum magasabb a képernyőnél, görgethető nézet
+    private readonly bool _longDoc;
+    private readonly int _offX;      // vízszintes középre igazítás
+    private int _viewY;              // nézet görgetése (dokumentum-sor a képernyő tetején)
+    private readonly System.Windows.Forms.Timer _edgeTimer = new() { Interval = 30 };
+
+    /// <summary>"Hosszú kép" gomb: az app görgetve rögzíti a kijelölés alatti tartalmat.</summary>
+    public event Action<FreezeForm>? LongCaptureRequested;
+    public bool IsLongDoc => _longDoc;
+    public Rectangle Selection => _sel;
+    public Bitmap CopyShot() => new(_shot);
     private Rectangle _sel;
 
     // Vágás húzása
@@ -59,7 +72,8 @@ internal sealed class FreezeForm : Form
     private Annotation? _drawing, _selected;
     private bool _movingAnn, _resizingAnn;
     private bool _pendingClick;   // rajzeszköznél lenyomva, de még nem dőlt el: kattintás vagy húzás
-    private bool _pendingDeselect;   // kijelölés mellett, az objektumon kívül lenyomva: felengedéskor fókuszvesztés
+    private bool _pendingDeselect;
+    private bool _keepOnClick;       // a kéz eszköz épp most jelölt ki: a felengedés ne vegye le a fókuszt   // kijelölés mellett, az objektumon kívül lenyomva: felengedéskor fókuszvesztés
 
     // Szöveg eszköz
     private static readonly int[] FontSizes = { 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 80 };
@@ -104,18 +118,25 @@ internal sealed class FreezeForm : Form
 
     private float StrokeW => Math.Max(2f, 2.2f * S);
 
-    public FreezeForm(System.Windows.Forms.Screen screen, Bitmap shot)
+    /// <param name="longDoc">true: görgetéssel összefűzött, a képernyőnél magasabb kép (görgethető szerkesztő).</param>
+    public FreezeForm(System.Windows.Forms.Screen screen, Bitmap shot, bool longDoc = false)
     {
         TargetScreen = screen;
         S = Ui.ScaleFor(screen.Bounds);
         _shot = shot;
         _full = new Rectangle(Point.Empty, shot.Size);
         _sel = _full;
+        _longDoc = longDoc;
 
-        _dim = new Bitmap(shot.Width, shot.Height, PixelFormat.Format32bppPArgb);
-        using (var g = Graphics.FromImage(_dim))
-        using (var b = new SolidBrush(Color.FromArgb(150, 8, 8, 12)))
+        if (longDoc)
         {
+            _offX = Math.Max(0, (screen.Bounds.Width - shot.Width) / 2);
+        }
+        else
+        {
+            _dim = new Bitmap(shot.Width, shot.Height, PixelFormat.Format32bppPArgb);
+            using var g = Graphics.FromImage(_dim);
+            using var b = new SolidBrush(Color.FromArgb(150, 8, 8, 12));
             g.DrawImageUnscaled(shot, 0, 0);
             g.FillRectangle(b, _full);
         }
@@ -134,6 +155,13 @@ internal sealed class FreezeForm : Form
         // Villogó kurzor gépelés közben
         _caretTimer.Tick += (_, _) => { if (_editing != null) { _caretOn = !_caretOn; Invalidate(); } };
         _caretTimer.Start();
+
+        // Hosszú képnél: görgetés a képernyő szélén húzás közben
+        if (longDoc)
+        {
+            _edgeTimer.Tick += (_, _) => EdgeScrollTick();
+            _edgeTimer.Start();
+        }
     }
 
     protected override CreateParams CreateParams
@@ -153,7 +181,8 @@ internal sealed class FreezeForm : Form
         base.OnShown(e);
         Bounds = TargetScreen.Bounds;
         // Fagyasztás-animáció: fehér villanás lecseng, a keret és az eszköztár beúszik
-        Ui.Animate(260, k => { _flash = 1 - (float)k; _ui = (float)k; Invalidate(); });
+        if (_longDoc) _flash = 0;   // a hosszú képnél nincs fagyasztás-villanás
+        Ui.Animate(260, k => { if (!_longDoc) _flash = 1 - (float)k; _ui = (float)k; Invalidate(); });
     }
 
     // ================= Eszközök =================
@@ -211,6 +240,7 @@ internal sealed class FreezeForm : Form
         _textBg = a.Background;
         _textBgOpacity = a.BackgroundOpacity;
         _caretOn = true;
+        _editSnap = TakeSnapshot();   // a gépelés egy visszavonható mozzanat
         Invalidate();
     }
 
@@ -225,6 +255,9 @@ internal sealed class FreezeForm : Form
             _anns.Remove(e);
             if (_selected == e) _selected = null;
         }
+        // Ha a gépelés változtatott a szövegen, egy lépésben visszavonható
+        if (_editSnap != null && !SameState(_editSnap, TakeSnapshot())) _undo.Push(_editSnap);
+        _editSnap = null;
         Invalidate();
     }
 
@@ -375,7 +408,7 @@ internal sealed class FreezeForm : Form
     }
 
     /// <summary>Súgófelirat a gombokhoz (lebegéskor jelenik meg).</summary>
-    private static string? TipFor(string id) => id switch
+    private string? TipFor(string id) => id switch
     {
         "toolCrop" => "Vágás  (C)",
         "toolBlur" => "Elmosás  (B)",
@@ -384,6 +417,7 @@ internal sealed class FreezeForm : Form
         "toolLine" => "Vonal  (L)  ·  Shift: 45°",
         "toolPen" => "Ceruza  (P)",
         "toolText" => "Szöveg  (T)  ·  dupla katt: szerkesztés",
+        "toolHand" => "Kijelölés  (H)  ·  kattints egy objektumra",
         "fontDown" => "Kisebb betű",
         "fontUp" => "Nagyobb betű",
         "blurNormal" => "Elmosás a téglalapon belül",
@@ -398,12 +432,17 @@ internal sealed class FreezeForm : Form
         "zBackward" => "Hátrébb",
         "zForward" => "Előrébb",
         "zToFront" => "Legelőre",
+        "delete" => "Törlés  (Delete)",
         "arrowStart" => "Nyíl az elején",
         "arrowSwap" => "Nyíl irányának cseréje",
         "arrowEnd" => "Nyíl a végén",
         "size" => "Képarány",
-        "copy" => "Vágólapra másol és PNG-be ment  (Enter)",
+        "copy" => Settings.SaveEnabled ? "Vágólapra másol és PNG-be ment  (Enter)" : "Vágólapra másol  (Enter)",
+        "save" => Settings.SaveEnabled ? "Mentés PNG-be: bekapcsolva" : "Mentés PNG-be: kikapcsolva (csak vágólap)",
         "folder" => "Mentési mappa:  " + Settings.SaveFolder,
+        "long" => _anns.Count == 0
+            ? "Hosszú kép: lefelé görgetve rögzíti a kijelölt részt"
+            : "Hosszú kép: rajzolás előtt használható",
         _ when id.StartsWith("color") => null,
         _ => null,
     };
@@ -418,7 +457,7 @@ internal sealed class FreezeForm : Form
         using var font = new Font("Segoe UI", 12 * S, GraphicsUnit.Pixel);
         var size = TextRenderer.MeasureText(tip, font);
         int w = size.Width + (int)(16 * S), h = (int)(26 * S), gap = (int)(8 * S);
-        int x = Math.Clamp(btn.R.X + btn.R.Width / 2 - w / 2, 0, Math.Max(0, _full.Width - w));
+        int x = Math.Clamp(btn.R.X + btn.R.Width / 2 - w / 2, 0, Math.Max(0, ScreenRect.Width - w));
         int y = btn.R.Top - gap - h - (int)(5 * S);
         if (y < 0) y = btn.R.Bottom + gap + (int)(5 * S);
         // Ne takarja a fölötte nyíló panelt: ha ott panel van, alá kerül
@@ -690,7 +729,54 @@ internal sealed class FreezeForm : Form
 
     private UiButton? ButtonAt(Point p) => _buttons.FirstOrDefault(b => b.R.Contains(p));
     private bool OnPanel(Point p) => _panels.Any(r => r.Contains(p));
-    private Point ClampToScreen(Point p) => new(Math.Clamp(p.X, 0, _full.Width), Math.Clamp(p.Y, 0, _full.Height));
+    /// <summary>Képernyős pont → dokumentum-pont (hosszú képnél eltolás és görgetés), a képen belülre szorítva.</summary>
+    private Point ClampToScreen(Point p) =>
+        new(Math.Clamp(p.X - _offX, 0, _full.Width), Math.Clamp(p.Y + _viewY, 0, _full.Height));
+
+    private Rectangle ScreenRect => new(0, 0, TargetScreen.Bounds.Width, TargetScreen.Bounds.Height);
+    private int MaxViewY => Math.Max(0, _full.Height - ScreenRect.Height + (int)(90 * S));   // alul hely az eszköztárnak
+
+    /// <summary>A kijelölés látható része képernyő-koordinátában (az eszköztár elhelyezéséhez).</summary>
+    private Rectangle SelOnScreen()
+    {
+        var r = Rectangle.Intersect(new Rectangle(_sel.X + _offX, _sel.Y - _viewY, _sel.Width, _sel.Height), ScreenRect);
+        return r.IsEmpty ? new Rectangle(0, ScreenRect.Bottom, ScreenRect.Width, 0) : r;
+    }
+
+    /// <summary>Görgő: hosszú képnél a nézetet görgeti (húzás közben is).</summary>
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        if (!_longDoc) return;
+        ScrollView(-(int)(e.Delta * S));
+    }
+
+    private void ScrollView(int dy)
+    {
+        int old = _viewY;
+        _viewY = Math.Clamp(_viewY + dy, 0, MaxViewY);
+        if (_viewY == old) return;
+        // Húzás közben a megfogott pont kövesse a nézetet
+        if (Capture)
+        {
+            var c = PointToClient(Cursor.Position);
+            OnMouseMove(new MouseEventArgs(MouseButtons.Left, 0, c.X, c.Y, 0));
+        }
+        Invalidate();
+    }
+
+    /// <summary>
+    /// Hosszú képnél húzás közben (vágás, rajzolás, mozgatás) a képernyő tetején vagy alján
+    /// a nézet magától görget; minél közelebb a szélhez, annál gyorsabban.
+    /// </summary>
+    private void EdgeScrollTick()
+    {
+        if (!_longDoc || !Capture) return;
+        var c = PointToClient(Cursor.Position);
+        float zone = 48 * S;
+        int h = ScreenRect.Height;
+        if (c.Y < zone) ScrollView(-(int)(6 * S + 30 * S * (zone - c.Y) / zone));
+        else if (c.Y > h - zone) ScrollView((int)(6 * S + 30 * S * (c.Y - (h - zone)) / zone));
+    }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
@@ -703,8 +789,30 @@ internal sealed class FreezeForm : Form
         if (OnPanel(e.Location)) return;
 
         var p = ClampToScreen(e.Location);
+        _beforeGesture = TakeSnapshot();   // a felengedéskor eldől, változott-e valami (rajzolás, mozgatás, vágás…)
         switch (_tool)
         {
+            case Tool.Hand:
+                // Kéz: objektumra kattintva kijelöli, és rögtön átvált az objektum eszközére.
+                // Lenyomva tartva azonnal mozgatható is. Üres helyre kattintva csak leveszi a fókuszt.
+                _start = p;
+                if (HandleAt(p) != null)
+                {
+                    BeginResize(_selected!, p);
+                    _resizingAnn = true;
+                    break;
+                }
+                var picked = AnnotationAt(p);
+                if (picked != null)
+                {
+                    SelectAnnotation(picked);
+                    _movingAnn = true;
+                    _last = p;
+                    _keepOnClick = true;   // ez a kattintás kijelölt, ne vegye le a fókuszt felengedéskor
+                }
+                else Deselect();
+                break;
+
             case Tool.Crop:
                 _drag = HitTest(p);
                 _start = p;
@@ -785,6 +893,7 @@ internal sealed class FreezeForm : Form
         else Cursor = _tool switch
         {
             Tool.Crop => CursorFor(HitTest(p)),
+            Tool.Hand => HandleCursor(p) ?? Cursors.Hand,
             // Nem kijelölt objektum fölött is célkereszt: a húzás ott is új objektumot rajzol
             // Fogópont: méretezés · kijelölt objektum: mozgatás ·
             // kijelölés mellett máshol: nyíl (kattintás = fókuszvesztés) · fókusz nélkül: rajzolás
@@ -812,7 +921,7 @@ internal sealed class FreezeForm : Form
             var id = _pressId;
             _pressId = null;
             var btn = ButtonAt(e.Location);
-            if (btn != null && btn.Id == id) btn.Click();
+            if (btn != null && btn.Id == id) Undoable(btn.Click);   // szín, nyíl, betű, sorrend, törlés, arány…
             Invalidate();
             return;
         }
@@ -825,6 +934,7 @@ internal sealed class FreezeForm : Form
             // Dupla kattintás második felengedése: a szerkesztés már elindult
             _suppressUp = false;
             _pendingClick = _pendingDeselect = _movingAnn = _resizingAnn = false;
+            _beforeGesture = null;
             Invalidate();
             return;
         }
@@ -863,7 +973,9 @@ internal sealed class FreezeForm : Form
         else if (_movingAnn)
         {
             _movingAnn = false;
-            if (IsClick(p)) Deselect();   // húzás nélküli kattintás a kijelöltre: fókuszvesztés
+            // Húzás nélküli kattintás a kijelöltre: fókuszvesztés (kivéve, ha épp a kéz jelölte ki)
+            if (IsClick(p) && !_keepOnClick) Deselect();
+            _keepOnClick = false;
         }
         else if (_drag != Hit.None)
         {
@@ -871,6 +983,58 @@ internal sealed class FreezeForm : Form
             bool click = Math.Abs(p.X - _start.X) <= 4 * S && Math.Abs(p.Y - _start.Y) <= 4 * S;
             if (click) SnapNearestCorner(p);
             else if (_sel.Width < 4 || _sel.Height < 4) _sel = _startSel;   // túl kicsi → vissza
+        }
+
+        // Ha a mozdulat változtatott valamin (rajzolás, mozgatás, méretezés, vágás), visszavonható
+        if (_beforeGesture != null && !SameState(_beforeGesture, TakeSnapshot())) _undo.Push(_beforeGesture);
+        _beforeGesture = null;
+        Invalidate();
+    }
+
+    // ================= Visszavonás (Ctrl+Z) =================
+
+    /// <summary>A visszaállítható állapot: jelölések, vágás, képarány.</summary>
+    private sealed record Snapshot(List<Annotation> Anns, Rectangle Sel, double? Ratio, string? RatioName);
+
+    private readonly Stack<Snapshot> _undo = new();
+    private Snapshot? _beforeGesture;   // egérlenyomáskori állapot
+    private Snapshot? _editSnap;        // gépelés kezdetekori állapot
+
+    /// <summary>Állapotkép. Az üres szövegdobozok nem számítanak (úgyis törlődnek).</summary>
+    private Snapshot TakeSnapshot() => new(
+        _anns.Where(a => !(a.Kind == Tool.Text && string.IsNullOrWhiteSpace(a.Text))).Select(a => a.Clone()).ToList(),
+        _sel, _ratio, _ratioName);
+
+    private static bool SameState(Snapshot a, Snapshot b) =>
+        a.Sel == b.Sel && a.Ratio == b.Ratio && a.RatioName == b.RatioName &&
+        a.Anns.Count == b.Anns.Count && a.Anns.Zip(b.Anns).All(p => p.First.SameAs(p.Second));
+
+    /// <summary>Művelet, amely visszavonható, ha valóban változtatott valamin.</summary>
+    private void Undoable(Action act)
+    {
+        var before = TakeSnapshot();
+        act();
+        if (!SameState(before, TakeSnapshot())) _undo.Push(before);
+    }
+
+    /// <summary>Az utolsó mozzanat visszavonása: rajzolás, mozgatás, méretezés, vágás, szín, törlés, gépelés…</summary>
+    private void Undo()
+    {
+        var current = TakeSnapshot();
+        while (_undo.Count > 0)
+        {
+            var s = _undo.Pop();
+            if (SameState(s, current)) continue;   // a látható állapoton nem változtatna → a következő
+            _editing = null;
+            _editSnap = null;
+            _anns.Clear();
+            _anns.AddRange(s.Anns.Select(a => a.Clone()));
+            _sel = s.Sel;
+            _ratio = s.Ratio;
+            _ratioName = s.RatioName;
+            _selected = null;
+            _drawing = null;
+            break;
         }
         Invalidate();
     }
@@ -909,6 +1073,11 @@ internal sealed class FreezeForm : Form
             case Keys.V when e.Control:
                 if (Clipboard.ContainsText()) TypeText(Clipboard.GetText().Replace("\r\n", "\n").Replace('\r', '\n'));
                 break;
+            case Keys.Z when e.Control:
+                // Gépelés közben: a gépelés vége, és visszavonja az utolsó mozzanatot (a gépelést)
+                StopEditing();
+                Undo();
+                break;
         }
     }
 
@@ -922,10 +1091,10 @@ internal sealed class FreezeForm : Form
             case Keys.Enter: Confirm(); return;
             case Keys.C when e.Control: Confirm(); return;
             case Keys.Z when e.Control:
-                if (_anns.Count > 0) { _anns.RemoveAt(_anns.Count - 1); _selected = null; Invalidate(); }
+                Undo();
                 return;
             case Keys.Delete or Keys.Back:
-                if (_selected != null) { _anns.Remove(_selected); _selected = null; Invalidate(); }
+                if (_selected != null) Undoable(DeleteSelected);
                 return;
         }
         if (e.Control || e.Alt) return;
@@ -934,7 +1103,7 @@ internal sealed class FreezeForm : Form
         Tool? t = e.KeyCode switch
         {
             Keys.C => Tool.Crop, Keys.B => Tool.Blur, Keys.O => Tool.Oval, Keys.R => Tool.Rect,
-            Keys.L => Tool.Line, Keys.P => Tool.Pen, Keys.T => Tool.Text, _ => null,
+            Keys.L => Tool.Line, Keys.P => Tool.Pen, Keys.T => Tool.Text, Keys.H => Tool.Hand, _ => null,
         };
         if (t != null) SetTool(t.Value);
     }
@@ -968,10 +1137,28 @@ internal sealed class FreezeForm : Form
         g.InterpolationMode = InterpolationMode.NearestNeighbor;
         g.CompositingQuality = CompositingQuality.HighSpeed;
 
-        // Kívül sötét, a vágás eredeti fényerejű
-        g.DrawImage(_dim, e.ClipRectangle, e.ClipRectangle, GraphicsUnit.Pixel);
-        var bright = Rectangle.Intersect(_sel, e.ClipRectangle);
-        if (!bright.IsEmpty) g.DrawImage(_shot, bright, bright, GraphicsUnit.Pixel);
+        if (_longDoc)
+        {
+            // Hosszú kép: sötét háttér, középre igazított, görgetett dokumentum
+            g.Clear(Color.FromArgb(18, 18, 20));
+            g.TranslateTransform(_offX, -_viewY);
+            var vis = Rectangle.Intersect(new Rectangle(-_offX, _viewY, ScreenRect.Width, ScreenRect.Height), _full);
+            if (!vis.IsEmpty)
+            {
+                g.DrawImage(_shot, vis, vis, GraphicsUnit.Pixel);
+                using var outside = new Region(vis);
+                outside.Exclude(_sel);
+                using var dimBrush = new SolidBrush(Color.FromArgb(150, 8, 8, 12));
+                g.FillRegion(dimBrush, outside);
+            }
+        }
+        else
+        {
+            // Kívül sötét, a vágás eredeti fényerejű
+            g.DrawImage(_dim!, e.ClipRectangle, e.ClipRectangle, GraphicsUnit.Pixel);
+            var bright = Rectangle.Intersect(_sel, e.ClipRectangle);
+            if (!bright.IsEmpty) g.DrawImage(_shot, bright, bright, GraphicsUnit.Pixel);
+        }
 
         Ui.Prepare(g);
         foreach (var a in _anns) DrawAnnotation(g, a);
@@ -981,11 +1168,9 @@ internal sealed class FreezeForm : Form
         if (_editing != null && _caretOn) DrawCaret(g, _editing);
 
         int alpha = (int)(255 * _ui);
-        if (alpha > 0)
-        {
-            DrawFrame(g, alpha);
-            DrawToolbar(g, alpha);
-        }
+        if (alpha > 0) DrawFrame(g, alpha);
+        g.ResetTransform();   // az eszköztár képernyő-koordinátában van
+        if (alpha > 0) DrawToolbar(g, alpha);
 
         if (_flash > 0)
         {
@@ -1002,15 +1187,15 @@ internal sealed class FreezeForm : Form
             {
                 // Inverz (fókusz): a vágáson belül minden el van mosva, kivéve a téglalapot
                 var state = g.Save();
-                g.SetClip(_sel);
+                g.SetClip(_sel, CombineMode.Intersect);
                 g.ExcludeClip(a.Box);
-                g.DrawImage(EnsureBlurred(), _sel, _sel, GraphicsUnit.Pixel);
+                DrawBlurred(g, _sel);
                 g.Restore(state);
                 return;
             }
             var r = Rectangle.Intersect(a.Box, _full);
             if (r.Width <= 0 || r.Height <= 0) return;
-            g.DrawImage(EnsureBlurred(), r, r, GraphicsUnit.Pixel);
+            DrawBlurred(g, r);
             return;
         }
 
@@ -1134,30 +1319,31 @@ internal sealed class FreezeForm : Form
     /// Erősen elmosott másolat: kicsinyítés, majd simított nagyítás.
     /// A szöveg teljesen olvashatatlan lesz alatta.
     /// </summary>
-    private Bitmap EnsureBlurred()
+    /// <remarks>
+    /// Csak a kicsinyített képet tartjuk meg, és rajzoláskor nagyítjuk fel a kért részt.
+    /// Így egy hosszú, sok ezer pixeles képnél sem kell egy teljes méretű elmosott másolat.
+    /// </remarks>
+    private void DrawBlurred(Graphics g, Rectangle r)
     {
-        if (_blurred != null) return _blurred;
-        int f = Math.Max(10, (int)(12 * S));
-        int sw = Math.Max(1, _shot.Width / f), sh = Math.Max(1, _shot.Height / f);
-
-        using var small = new Bitmap(sw, sh, PixelFormat.Format32bppPArgb);
-        using (var g = Graphics.FromImage(small))
+        if (_blurSmall == null)
         {
-            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.DrawImage(_shot, new Rectangle(0, 0, sw, sh));
+            _blurF = Math.Max(10, (int)(12 * S));
+            int sw = Math.Max(1, _shot.Width / _blurF), sh = Math.Max(1, _shot.Height / _blurF);
+            _blurSmall = new Bitmap(sw, sh, PixelFormat.Format32bppPArgb);
+            using var sg = Graphics.FromImage(_blurSmall);
+            sg.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            sg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            sg.DrawImage(_shot, new Rectangle(0, 0, sw, sh));
         }
 
-        _blurred = new Bitmap(_shot.Width, _shot.Height, PixelFormat.Format32bppPArgb);
-        using (var g = Graphics.FromImage(_blurred))
-        using (var ia = new ImageAttributes())
-        {
-            ia.SetWrapMode(WrapMode.TileFlipXY);   // a széleken se legyen sötét perem
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(small, _full, 0, 0, sw, sh, GraphicsUnit.Pixel, ia);
-        }
-        return _blurred;
+        float fx = _shot.Width / (float)_blurSmall.Width, fy = _shot.Height / (float)_blurSmall.Height;
+        using var ia = new ImageAttributes();
+        ia.SetWrapMode(WrapMode.TileFlipXY);   // a széleken se legyen sötét perem
+        var st = g.Save();
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        g.DrawImage(_blurSmall, r, r.X / fx, r.Y / fy, r.Width / fx, r.Height / fy, GraphicsUnit.Pixel, ia);
+        g.Restore(st);
     }
 
     private void DrawFrame(Graphics g, int a)
@@ -1202,16 +1388,21 @@ internal sealed class FreezeForm : Form
         using var sizeFont = new Font("Segoe UI", 12 * S, GraphicsUnit.Pixel);
         _sizeText = _ratioName != null ? $"{_sel.Width} × {_sel.Height}  ·  {_ratioName}" : $"{_sel.Width} × {_sel.Height}";
         int sizeW = TextRenderer.MeasureText(_sizeText, sizeFont).Width + (int)(22 * S);
-        int copyBtnW = (int)(204 * S);                  // "Másol [ikon] & Ment [ikon]"
-        int copyW = sizeW + copyBtnW + gap + b + pad;   // [méret] [📋💾 Másolás] [mappa]
-        int orderW = pad * 2 + b * 4 + gap * 3;   // rétegsorrend panel
-        int total = toolsW + between + orderW + between + copyW;
+        int copyBtnW = (int)(132 * S);                  // "[ikon] Másolás"
+        int saveW = (int)(64 * S);                      // mentés be/ki kapcsoló
+        int longW = _longDoc ? 0 : b + gap;                 // "Hosszú kép" gomb csak a fagyasztott képen
+        int copyW = sizeW + longW + copyBtnW + gap + saveW + gap + b + pad;   // [méret] [hosszú] [Másolás] [mentés ◐] [mappa]
+        int total = toolsW + between + copyW;   // a rétegsorrend nem itt van, hanem a kijelölt objektum mellett
 
-        int x = _sel.Left + (_sel.Width - total) / 2;
-        int y = _sel.Bottom + outer;
-        if (y + h > _full.Height - outer) y = _sel.Bottom - h - outer;   // nincs hely alatta → belül
+        // Képernyő-koordinátában: hosszú képnél a kijelölés látható része számít
+        var selS = SelOnScreen();
+        var scr = ScreenRect;
+        int x = selS.Left + (selS.Width - total) / 2;
+        int y = selS.Bottom + outer;
+        if (y + h > scr.Height - outer) y = selS.Bottom - h - outer;   // nincs hely alatta → belül
+        if (y + h > scr.Height - outer) y = scr.Height - h - outer;
         if (y < outer) y = outer;
-        x = Math.Clamp(x, outer, Math.Max(outer, _full.Width - total - outer));
+        x = Math.Clamp(x, outer, Math.Max(outer, scr.Width - total - outer));
 
         // Eszközök panel
         _panels.Add(new Rectangle(x, y, toolsW, h));
@@ -1241,28 +1432,32 @@ internal sealed class FreezeForm : Form
         }
 
         // Méret + Másolás panel
-        // Rétegsorrend panel: leghátra · hátrébb · előrébb · legelőre (csak kijelölt objektumra hat)
-        var orderPanel = new Rectangle(x + toolsW + between, y, orderW, h);
-        _panels.Add(orderPanel);
-        var orders = new[] { ZOrder.ToBack, ZOrder.Backward, ZOrder.Forward, ZOrder.ToFront };
-        for (int i = 0; i < orders.Length; i++)
-        {
-            var z = orders[i];
-            var r = new Rectangle(orderPanel.X + pad + i * (b + gap), y + pad, b, b);
-            _buttons.Add(new UiButton("z" + z, r, () => Reorder(z), () => false,
-                (g, rr, c) => DrawOrderIcon(g, z, rr, c), Plain: !CanReorder(z)));
-        }
-
-        var copyPanel = new Rectangle(orderPanel.Right + between, y, copyW, h);
+        var copyPanel = new Rectangle(x + toolsW + between, y, copyW, h);
         _panels.Add(copyPanel);
+
+        LayoutObjectPanel(h, pad, b, gap);
         _sizeRect = new Rectangle(copyPanel.X + pad, y + pad, sizeW - pad, h - pad * 2);
         _buttons.Add(new UiButton("size", _sizeRect, () => { _ratioMenuOpen = !_ratioMenuOpen; Invalidate(); },
             () => _ratioMenuOpen, DrawSizeLabel));
-        // Másolás (vágólap + mentés), jobbra mellette a mentési mappa – a "hova" a "mentés" után jön
-        _buttons.Add(new UiButton("copy", new Rectangle(copyPanel.X + sizeW, y + pad, copyBtnW, h - pad * 2),
+        // Hosszú kép: a kijelölés alatti tartalmat az app lefelé görgetve rögzíti
+        if (!_longDoc)
+        {
+            bool canLong = _anns.Count == 0;   // a már rajzolt jelölések elvesznének
+            _buttons.Add(new UiButton("long", new Rectangle(copyPanel.X + sizeW, y + pad, b, b),
+                () => { if (_anns.Count == 0) { StopEditing(); LongCaptureRequested?.Invoke(this); } },
+                () => false, (g, r, c) => DrawLongIcon(g, r, canLong ? c : Color.FromArgb(c.A * 70 / 255, c)), Plain: !canLong));
+        }
+
+        // Másolás (csak vágólap), mellette a mentés kapcsoló (be: PNG-be is ment), majd a mappa
+        int copyX = copyPanel.X + sizeW + longW;
+        _buttons.Add(new UiButton("copy", new Rectangle(copyX, y + pad, copyBtnW, h - pad * 2),
             Confirm, () => false, DrawCopyButton, Plain: true));
-        _buttons.Add(new UiButton("folder", new Rectangle(copyPanel.X + sizeW + copyBtnW + gap, y + pad, b, b),
-            ChooseFolder, () => false, DrawFolderIcon));
+        int saveX = copyX + copyBtnW + gap;
+        _buttons.Add(new UiButton("save", new Rectangle(saveX, y + pad, saveW, h - pad * 2),
+            () => { Settings.SaveEnabled = !Settings.SaveEnabled; Invalidate(); }, () => false, DrawSaveToggle));
+        _buttons.Add(new UiButton("folder", new Rectangle(saveX + saveW + gap, y + pad, b, b),
+            ChooseFolder, () => false,
+            (g, r, c) => DrawFolderIcon(g, r, Settings.SaveEnabled ? c : Color.FromArgb(c.A * 110 / 255, c))));
 
         // Képarány-menü a méretkijelző fölött (vagy alatt, ha fölötte nincs hely)
         if (_ratioMenuOpen)
@@ -1272,7 +1467,7 @@ internal sealed class FreezeForm : Form
             int pw = pad * 2 + widths.Sum() + gap * (Ratios.Length - 1);
             int py = y - h - (int)(8 * S);
             if (py < outer) py = y + h + (int)(8 * S);
-            int px = Math.Clamp(copyPanel.Right - pw, outer, Math.Max(outer, _full.Width - pw - outer));
+            int px = Math.Clamp(copyPanel.Right - pw, outer, Math.Max(outer, ScreenRect.Width - pw - outer));
             _panels.Add(new Rectangle(px, py, pw, h));
             int rx = px + pad;
             for (int i = 0; i < Ratios.Length; i++)
@@ -1291,7 +1486,7 @@ internal sealed class FreezeForm : Form
             int pw = pad * 2 + b * 2 + gap;
             int py = y - h - (int)(8 * S);
             if (py < outer) py = y + h + (int)(8 * S);
-            int px = Math.Clamp(blurBtn.X + b / 2 - pw / 2, outer, Math.Max(outer, _full.Width - pw - outer));
+            int px = Math.Clamp(blurBtn.X + b / 2 - pw / 2, outer, Math.Max(outer, ScreenRect.Width - pw - outer));
             _panels.Add(new Rectangle(px, py, pw, h));
             _buttons.Add(new UiButton("blurNormal", new Rectangle(px + pad, py + pad, b, b),
                 () => SetBlurInverse(false), () => !_blurInverse, (g, r, c) => DrawBlurModeIcon(g, r, c, false)));
@@ -1309,7 +1504,7 @@ internal sealed class FreezeForm : Form
             int pw = pad * 2 + b * 2 + lw + sp + nBg * b + (nBg - 1) * gap + sp + b * 2 + ow;
             int py = y - h - (int)(8 * S);
             if (py < outer) py = y + h + (int)(8 * S);
-            int px = Math.Clamp(textBtn.X + b / 2 - pw / 2, outer, Math.Max(outer, _full.Width - pw - outer));
+            int px = Math.Clamp(textBtn.X + b / 2 - pw / 2, outer, Math.Max(outer, ScreenRect.Width - pw - outer));
             _panels.Add(new Rectangle(px, py, pw, h));
             _textSepTop = py + (int)(12 * S);
             _textSepBottom = py + h - (int)(12 * S);
@@ -1351,7 +1546,7 @@ internal sealed class FreezeForm : Form
             int pw = pad * 2 + b * 3 + gap * 2;
             int py = y - h - (int)(8 * S);
             if (py < outer) py = y + h + (int)(8 * S);
-            int px = Math.Clamp(lineBtn.X + b / 2 - pw / 2, outer, Math.Max(outer, _full.Width - pw - outer));
+            int px = Math.Clamp(lineBtn.X + b / 2 - pw / 2, outer, Math.Max(outer, ScreenRect.Width - pw - outer));
             _panels.Add(new Rectangle(px, py, pw, h));
             _buttons.Add(new UiButton("arrowStart", new Rectangle(px + pad, py + pad, b, b),
                 () => ToggleArrow(true), () => _arrowStart, (g, r, c) => DrawArrowIcon(g, r, c, true)));
@@ -1372,7 +1567,10 @@ internal sealed class FreezeForm : Form
             }
 
         using (var sp = new Pen(Color.FromArgb(a * 70 / 255, Color.White), 1f * S))
+        {
             g.DrawLine(sp, _sepX, _sepTop, _sepX, _sepBottom);
+            if (_objSepX >= 0) g.DrawLine(sp, _objSepX, _objSepY.top, _objSepX, _objSepY.bottom);
+        }
 
         foreach (var btn in _buttons)
         {
@@ -1475,6 +1673,90 @@ internal sealed class FreezeForm : Form
     }
 
     /// <summary>Mentési mappa választása a fagyasztott réteg fölött.</summary>
+    /// <summary>
+    /// Objektum mini panel: csak akkor látszik, ha van kijelölt objektum, és mellette lebeg
+    /// (a jobb felső sarka fölött; ha ott nincs hely, alatta).
+    /// [leghátra · hátrébb · előrébb · legelőre | törlés]
+    /// Húzás, mozgatás és rajzolás közben elrejtjük, hogy ne zavarjon.
+    /// </summary>
+    private void LayoutObjectPanel(int h, int pad, int b, int gap)
+    {
+        _objSepX = -1;
+        if (_selected == null || _drawing != null || _movingAnn || _resizingAnn || _drag != Hit.None) return;
+
+        int sep = (int)(11 * S), margin = (int)(10 * S), outer = (int)(14 * S);
+        int pw = pad * 2 + b * 5 + gap * 3 + sep;
+        var box = _selected.Box;
+        box.Inflate((int)(8 * S), (int)(8 * S));
+        var scr = ScreenRect;
+        // Dokumentum → képernyő (hosszú képnél eltolás és görgetés)
+        var bs = new Rectangle(box.X + _offX, box.Y - _viewY, box.Width, box.Height);
+
+        int px = Math.Clamp(bs.Right - pw, outer, Math.Max(outer, scr.Width - pw - outer));
+        int py = bs.Top - h - margin;
+        if (py < outer) py = bs.Bottom + margin;                       // fölötte nincs hely → alatta
+        if (py + h > scr.Height - outer) py = Math.Max(outer, bs.Top + margin);   // alatta sincs → belül
+        var panel = new Rectangle(px, py, pw, h);
+
+        // Ne takarja el a fő eszköztárat
+        if (_panels.Any(p => p.IntersectsWith(panel))) panel.Y = Math.Max(outer, _panels.Min(p => p.Top) - h - margin);
+        _panels.Add(panel);
+
+        var orders = new[] { ZOrder.ToBack, ZOrder.Backward, ZOrder.Forward, ZOrder.ToFront };
+        for (int i = 0; i < orders.Length; i++)
+        {
+            var z = orders[i];
+            var r = new Rectangle(panel.X + pad + i * (b + gap), panel.Y + pad, b, b);
+            _buttons.Add(new UiButton("z" + z, r, () => Reorder(z), () => false,
+                (g, rr, c) => DrawOrderIcon(g, z, rr, c), Plain: !CanReorder(z)));
+        }
+        _objSepX = panel.X + pad + 4 * b + 3 * gap + sep / 2;
+        _objSepY = (panel.Top + (int)(12 * S), panel.Bottom - (int)(12 * S));
+        _buttons.Add(new UiButton("delete", new Rectangle(panel.X + pad + 4 * b + 3 * gap + sep, panel.Y + pad, b, b),
+            DeleteSelected, () => false, DrawTrashIcon));
+    }
+
+    private int _objSepX = -1;
+    private (int top, int bottom) _objSepY;
+
+    private void DeleteSelected()
+    {
+        if (_selected == null) return;
+        var target = _selected;
+        StopEditing();
+        if (_selected == null) { Invalidate(); return; }   // üres szöveg volt, már törlődött
+        _anns.Remove(target);
+        _selected = null;
+        Invalidate();
+    }
+
+    /// <summary>Kuka ikon: fedél fogantyúval, lefelé szűkülő test két csíkkal.</summary>
+    private void DrawTrashIcon(Graphics g, Rectangle r, Color c)
+    {
+        var ib = RectangleF.Inflate(r, -10.5f * S, -9.5f * S);
+        using var pen = new Pen(c, 1.6f * S) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        float lidY = ib.Top + ib.Height * 0.2f;
+        g.DrawLine(pen, ib.Left, lidY, ib.Right, lidY);
+        g.DrawLines(pen, new[] { new PointF(ib.Left + ib.Width * 0.36f, lidY), new PointF(ib.Left + ib.Width * 0.36f, ib.Top),
+                                 new PointF(ib.Right - ib.Width * 0.36f, ib.Top), new PointF(ib.Right - ib.Width * 0.36f, lidY) });
+        g.DrawLines(pen, new[] { new PointF(ib.Left + ib.Width * 0.1f, lidY), new PointF(ib.Left + ib.Width * 0.18f, ib.Bottom),
+                                 new PointF(ib.Right - ib.Width * 0.18f, ib.Bottom), new PointF(ib.Right - ib.Width * 0.1f, lidY) });
+        float cy0 = lidY + ib.Height * 0.2f, cy1 = ib.Bottom - ib.Height * 0.16f;
+        g.DrawLine(pen, ib.Left + ib.Width * 0.4f, cy0, ib.Left + ib.Width * 0.4f, cy1);
+        g.DrawLine(pen, ib.Right - ib.Width * 0.4f, cy0, ib.Right - ib.Width * 0.4f, cy1);
+    }
+
+    /// <summary>Hosszú kép ikon: álló lap, benne lefelé mutató nyíl.</summary>
+    private void DrawLongIcon(Graphics g, Rectangle r, Color c)
+    {
+        var ib = RectangleF.Inflate(r, -11 * S, -8.5f * S);
+        using var pen = new Pen(c, 1.6f * S) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        using (var p = Ui.Rounded(ib, 2.2f * S)) g.DrawPath(pen, p);
+        float cx = ib.Left + ib.Width / 2, top = ib.Top + ib.Height * 0.22f, bot = ib.Bottom - ib.Height * 0.2f, a = ib.Width * 0.28f;
+        g.DrawLine(pen, cx, top, cx, bot);
+        g.DrawLines(pen, new[] { new PointF(cx - a, bot - a), new PointF(cx, bot), new PointF(cx + a, bot - a) });
+    }
+
     private void ChooseFolder()
     {
         StopEditing();
@@ -1511,28 +1793,41 @@ internal sealed class FreezeForm : Form
         using (var path = Ui.Rounded(r, r.Height / 2f))
         using (var bb = new SolidBrush(Color.FromArgb(c.A, accent)))
             g.FillPath(bb, path);
-        // Tartalom: "Másol [vágólap] & Ment [floppy]" – középre igazítva
+        // Tartalom: "[másolás ikon]  Másolás" – középre igazítva
         using var font = new Font("Segoe UI Semibold", 14 * S, GraphicsUnit.Pixel);
-        using var ampFont = new Font("Segoe UI", 14 * S, GraphicsUnit.Pixel);
         var flags = TextFormatFlags.NoPadding;
-        int wCopy = TextRenderer.MeasureText("Másol", font, Size.Empty, flags).Width;
-        int wSave = TextRenderer.MeasureText("Ment", font, Size.Empty, flags).Width;
-        int wAmp = TextRenderer.MeasureText("&", ampFont, Size.Empty, flags | TextFormatFlags.NoPrefix).Width;
-        float icon = 18 * S, iconGap = 5 * S, ampGap = 8 * S;
-        float contentW = wCopy + iconGap + icon + ampGap + wAmp + ampGap + wSave + iconGap + icon;
-        float x = r.X + (r.Width - contentW) / 2, cy = r.Y + r.Height / 2f;
-        int ty = (int)(cy - font.Height / 2f);
-        var white = Color.FromArgb(c.A, Color.White);
+        int wText = TextRenderer.MeasureText("Másolás", font, Size.Empty, flags).Width;
+        float icon = 17 * S, iconGap = 8 * S;
+        float x = r.X + (r.Width - (icon + iconGap + wText)) / 2, cy = r.Y + r.Height / 2f;
+        DrawClipboardGlyph(g, new RectangleF(x, cy - icon / 2, icon, icon), Color.FromArgb(c.A, Color.White));
+        TextRenderer.DrawText(g, "Másolás", font, new Point((int)(x + icon + iconGap), (int)(cy - font.Height / 2f)), Color.White, flags);
+    }
 
-        TextRenderer.DrawText(g, "Másol", font, new Point((int)x, ty), Color.White, flags);
-        x += wCopy + iconGap;
-        DrawClipboardGlyph(g, new RectangleF(x, cy - icon / 2, icon, icon), white);
-        x += icon + ampGap;
-        TextRenderer.DrawText(g, "&", ampFont, new Point((int)x, ty), Color.FromArgb(215, 215, 245), flags | TextFormatFlags.NoPrefix);
-        x += wAmp + ampGap;
-        TextRenderer.DrawText(g, "Ment", font, new Point((int)x, ty), Color.White, flags);
-        x += wSave + iconGap;
-        DrawFloppyGlyph(g, new RectangleF(x, cy - icon / 2, icon, icon), white);
+    /// <summary>
+    /// Mentés kapcsoló: modern csúszka + floppy ikon. Bekapcsolva a Másolás PNG-be is ment
+    /// (lila csúszka, fehér floppy), kikapcsolva csak vágólapra másol (szürke csúszka, halvány floppy).
+    /// </summary>
+    private void DrawSaveToggle(Graphics g, Rectangle r, Color c)
+    {
+        bool on = Settings.SaveEnabled;
+        float tw = 30 * S, th = 18 * S, icon = 17 * S, gap = 7 * S;
+        float x = r.X + (r.Width - (tw + gap + icon)) / 2, cy = r.Y + r.Height / 2f;
+
+        // Csúszka
+        var track = new RectangleF(x, cy - th / 2, tw, th);
+        var trackCol = on ? Ui.Accent : Color.FromArgb(72, 72, 82);
+        if (_hoverId == "save") trackCol = ControlPaint.Light(trackCol, 0.2f);
+        using (var p = Ui.Rounded(track, th / 2))
+        using (var b = new SolidBrush(Color.FromArgb(c.A, trackCol)))
+            g.FillPath(b, p);
+        float k = th - 5 * S;
+        float kx = on ? track.Right - k - 2.5f * S : track.Left + 2.5f * S;
+        using (var kb = new SolidBrush(Color.FromArgb(c.A, Color.White)))
+            g.FillEllipse(kb, kx, cy - k / 2, k, k);
+
+        // Floppy: be → fehér, ki → halvány
+        var fc = on ? Color.FromArgb(c.A, Color.White) : Color.FromArgb(c.A * 110 / 255, Ui.Text);
+        DrawFloppyGlyph(g, new RectangleF(track.Right + gap, cy - icon / 2, icon, icon), fc, Ui.Bg);
     }
 
     /// <summary>
@@ -1563,7 +1858,7 @@ internal sealed class FreezeForm : Form
     }
 
     /// <summary>Floppy: lekerekített, jobb felső sarkán levágott test, fent kitöltött zár, lent címke.</summary>
-    private void DrawFloppyGlyph(Graphics g, RectangleF r, Color c)
+    private void DrawFloppyGlyph(Graphics g, RectangleF r, Color c, Color? slotColor = null)
     {
         using var pen = new Pen(c, 1.6f * S) { LineJoin = LineJoin.Round };
         var body = RectangleF.Inflate(r, -r.Width * 0.06f, -r.Height * 0.06f);
@@ -1584,7 +1879,7 @@ internal sealed class FreezeForm : Form
         // Fém zár fent (kitöltve, rajta rés)
         var shutter = RectangleF.FromLTRB(body.Left + body.Width * 0.24f, body.Top, body.Right - body.Width * 0.32f, body.Top + body.Height * 0.32f);
         using (var br = new SolidBrush(c)) g.FillRectangle(br, shutter);
-        using (var slot = new SolidBrush(Ui.Accent))
+        using (var slot = new SolidBrush(slotColor ?? Ui.Accent))
             g.FillRectangle(slot, shutter.Right - shutter.Width * 0.38f, shutter.Top + shutter.Height * 0.2f, shutter.Width * 0.2f, shutter.Height * 0.6f);
 
         // Címke lent
@@ -1656,6 +1951,30 @@ internal sealed class FreezeForm : Form
                     new PointF(ib.Left + ib.Width * 0.6f, ib.Bottom + u * 2), new PointF(ib.Right, ib.Top + u));
                 break;
 
+            case Tool.Hand:
+            {
+                // Nyitott tenyér: négy ujj (különböző hosszal), tenyér nyitott tetővel, oldalt hüvelykujj
+                float l = ib.Left + ib.Width * 0.24f, rr = ib.Right - ib.Width * 0.04f;
+                float palmTop = ib.Top + ib.Height * 0.48f, bot = ib.Bottom + u * 0.4f, rad = (rr - l) * 0.38f;
+                using (var palm = new GraphicsPath())
+                {
+                    palm.AddLine(l, palmTop, l, bot - rad);
+                    palm.AddArc(l, bot - rad * 2, rad * 2, rad * 2, 180, -90);
+                    palm.AddLine(l + rad, bot, rr - rad, bot);
+                    palm.AddArc(rr - rad * 2, bot - rad * 2, rad * 2, rad * 2, 90, -90);
+                    palm.AddLine(rr, bot - rad, rr, palmTop);
+                    g.DrawPath(pen, palm);
+                }
+                float[] tops = { 0.16f, -0.06f, 0.0f, 0.18f };
+                for (int i = 0; i < 4; i++)
+                {
+                    float fx = l + (rr - l) * i / 3f;
+                    g.DrawLine(pen, fx, palmTop + u * 0.3f, fx, ib.Top + ib.Height * tops[i]);
+                }
+                g.DrawLine(pen, l, ib.Top + ib.Height * 0.74f, ib.Left - u * 0.3f, ib.Top + ib.Height * 0.5f);
+                break;
+            }
+
             case Tool.Text:
                 // Nagy "T": vízszintes felső szár és függőleges törzs
                 float cx = ib.Left + ib.Width / 2;
@@ -1688,7 +2007,7 @@ internal sealed class FreezeForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _caretTimer.Dispose(); _shot.Dispose(); _dim.Dispose(); _blurred?.Dispose(); }
+        if (disposing) { _caretTimer.Dispose(); _edgeTimer.Dispose(); _shot.Dispose(); _dim?.Dispose(); _blurSmall?.Dispose(); }
         base.Dispose(disposing);
     }
 }

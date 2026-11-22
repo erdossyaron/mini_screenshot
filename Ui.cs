@@ -117,13 +117,13 @@ internal class FloatingForm : Form
 internal sealed class ToastForm : FloatingForm
 {
     private readonly Bitmap _thumb;
-    private readonly string _file;
+    private readonly string? _file;   // null: nem mentett, csak vágólapra másolt
     private readonly Rectangle _thumbRect;
     private readonly System.Windows.Forms.Timer _life = new() { Interval = 2200 };
     private readonly Rectangle _closeRect;
     private bool _closeHover;
 
-    private ToastForm(System.Windows.Forms.Screen screen, Bitmap shot, string file) : base(screen.Bounds)
+    private ToastForm(System.Windows.Forms.Screen screen, Bitmap shot, string? file) : base(screen.Bounds)
     {
         _file = file;
         int pad = (int)(8 * S);
@@ -151,7 +151,7 @@ internal sealed class ToastForm : FloatingForm
 
     protected override bool ShowWithoutActivation => true;
 
-    public static void Show(System.Windows.Forms.Screen screen, Bitmap shot, string file)
+    public static void Show(System.Windows.Forms.Screen screen, Bitmap shot, string? file)
     {
         var t = new ToastForm(screen, shot, file);
         t.Show();
@@ -182,7 +182,7 @@ internal sealed class ToastForm : FloatingForm
     protected override void OnMouseUp(MouseEventArgs e)
     {
         // X: csak bezár; máshol bal klikk: megmutatja a fájlt az Intézőben
-        if (e.Button == MouseButtons.Left && !_closeRect.Contains(e.Location))
+        if (e.Button == MouseButtons.Left && _file != null && !_closeRect.Contains(e.Location))
             System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{_file}\"");
         FadeClose();
     }
@@ -204,8 +204,8 @@ internal sealed class ToastForm : FloatingForm
         using var dot = new SolidBrush(Ui.Accent);
         float d = 7 * S;
         g.FillEllipse(dot, row.X + 2 * S, row.Y + (row.Height - d) / 2, d, d);
-        // A gomb ("Másol & Ment") párja; NoPrefix nélkül az "&" aláhúzásjelként tűnne el
-        TextRenderer.DrawText(g, "Másolva & mentve", font,
+        // Mentés kapcsoló szerint; NoPrefix nélkül az "&" aláhúzásjelként tűnne el
+        TextRenderer.DrawText(g, _file != null ? "Másolva & mentve" : "Vágólapra másolva", font,
             new Rectangle(row.X + (int)(16 * S), row.Y, row.Width, row.Height), Ui.Text,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 

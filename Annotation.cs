@@ -1,7 +1,7 @@
 namespace Screen;
 
 /// <summary>Eszközök. A Crop az alapértelmezett: csak ilyenkor méretezhető a vágás.</summary>
-internal enum Tool { Crop, Blur, Oval, Rect, Line, Pen, Text }
+internal enum Tool { Crop, Blur, Oval, Rect, Line, Pen, Text, Hand }
 
 /// <summary>Egy lerakott jelölés a fagyasztott képen (képernyő-koordinátákban).</summary>
 internal sealed class Annotation
@@ -9,7 +9,7 @@ internal sealed class Annotation
     public Tool Kind;
     public Color Color;
     public Point A, B;                       // kezdő- és végpont (alakzat, vonal, elmosás)
-    public readonly List<Point> Points = new();  // ceruza pontjai
+    public List<Point> Points = new();  // ceruza pontjai
     public bool ArrowStart, ArrowEnd;
     public bool Inverse;             // elmosás: inverz = minden el van mosva, csak a téglalap éles (fókusz)
 
@@ -35,6 +35,22 @@ internal sealed class Annotation
     public bool IsTiny => Kind == Tool.Pen
         ? Points.Count < 2
         : Math.Abs(A.X - B.X) < 3 && Math.Abs(A.Y - B.Y) < 3;
+
+    /// <summary>Mély másolat a visszavonáshoz.</summary>
+    public Annotation Clone()
+    {
+        var c = (Annotation)MemberwiseClone();
+        c.Points = new List<Point>(Points);   // saját lista, ne az eredetivel közös
+        return c;
+    }
+
+    /// <summary>Ugyanúgy néz-e ki (a visszavonáshoz: változott-e valami).</summary>
+    public bool SameAs(Annotation o) =>
+        Kind == o.Kind && Color.ToArgb() == o.Color.ToArgb() && A == o.A && B == o.B &&
+        ArrowStart == o.ArrowStart && ArrowEnd == o.ArrowEnd && Inverse == o.Inverse &&
+        Text == o.Text && FontSize == o.FontSize && ManualSize == o.ManualSize &&
+        Background.ToArgb() == o.Background.ToArgb() && BackgroundOpacity == o.BackgroundOpacity &&
+        Points.SequenceEqual(o.Points);
 
     public void Offset(int dx, int dy)
     {
