@@ -433,6 +433,7 @@ internal sealed class FreezeForm : Form
         "zForward" => "Előrébb",
         "zToFront" => "Legelőre",
         "delete" => "Törlés  (Delete)",
+        "history" => "Korábbi képek: újra megnyitható és szerkeszthető",
         "arrowStart" => "Nyíl az elején",
         "arrowSwap" => "Nyíl irányának cseréje",
         "arrowEnd" => "Nyíl a végén",
@@ -1391,7 +1392,8 @@ internal sealed class FreezeForm : Form
         int copyBtnW = (int)(132 * S);                  // "[ikon] Másolás"
         int saveW = (int)(64 * S);                      // mentés be/ki kapcsoló
         int longW = _longDoc ? 0 : b + gap;                 // "Hosszú kép" gomb csak a fagyasztott képen
-        int copyW = sizeW + longW + copyBtnW + gap + saveW + gap + b + pad;   // [méret] [hosszú] [Másolás] [mentés ◐] [mappa]
+        int histW = b + gap;                            // korábbi képek gomb
+        int copyW = histW + sizeW + longW + copyBtnW + gap + saveW + gap + b + pad;   // [előzmény] [méret] [hosszú] [Másolás] [mentés ◐] [mappa]
         int total = toolsW + between + copyW;   // a rétegsorrend nem itt van, hanem a kijelölt objektum mellett
 
         // Képernyő-koordinátában: hosszú képnél a kijelölés látható része számít
@@ -1436,20 +1438,30 @@ internal sealed class FreezeForm : Form
         _panels.Add(copyPanel);
 
         LayoutObjectPanel(h, pad, b, gap);
-        _sizeRect = new Rectangle(copyPanel.X + pad, y + pad, sizeW - pad, h - pad * 2);
-        _buttons.Add(new UiButton("size", _sizeRect, () => { _ratioMenuOpen = !_ratioMenuOpen; Invalidate(); },
+
+        // Korábbi képek: legördülő bélyegképekkel
+        var histBtn = new Rectangle(copyPanel.X + pad, y + pad, b, b);
+        _buttons.Add(new UiButton("history", histBtn, ToggleHistory, () => _historyOpen, DrawHistoryIcon));
+
+        _sizeRect = new Rectangle(copyPanel.X + pad + histW, y + pad, sizeW - pad, h - pad * 2);
+        _buttons.Add(new UiButton("size", _sizeRect, () =>
+            {
+                _ratioMenuOpen = !_ratioMenuOpen;
+                if (_ratioMenuOpen && _historyOpen) { _historyOpen = false; DisposeHistory(); }
+                Invalidate();
+            },
             () => _ratioMenuOpen, DrawSizeLabel));
         // Hosszú kép: a kijelölés alatti tartalmat az app lefelé görgetve rögzíti
         if (!_longDoc)
         {
             bool canLong = _anns.Count == 0;   // a már rajzolt jelölések elvesznének
-            _buttons.Add(new UiButton("long", new Rectangle(copyPanel.X + sizeW, y + pad, b, b),
+            _buttons.Add(new UiButton("long", new Rectangle(copyPanel.X + histW + sizeW, y + pad, b, b),
                 () => { if (_anns.Count == 0) { StopEditing(); LongCaptureRequested?.Invoke(this); } },
                 () => false, (g, r, c) => DrawLongIcon(g, r, canLong ? c : Color.FromArgb(c.A * 70 / 255, c)), Plain: !canLong));
         }
 
         // Másolás (csak vágólap), mellette a mentés kapcsoló (be: PNG-be is ment), majd a mappa
-        int copyX = copyPanel.X + sizeW + longW;
+        int copyX = copyPanel.X + histW + sizeW + longW;
         _buttons.Add(new UiButton("copy", new Rectangle(copyX, y + pad, copyBtnW, h - pad * 2),
             Confirm, () => false, DrawCopyButton, Plain: true));
         int saveX = copyX + copyBtnW + gap;
@@ -1458,6 +1470,8 @@ internal sealed class FreezeForm : Form
         _buttons.Add(new UiButton("folder", new Rectangle(saveX + saveW + gap, y + pad, b, b),
             ChooseFolder, () => false,
             (g, r, c) => DrawFolderIcon(g, r, Settings.SaveEnabled ? c : Color.FromArgb(c.A * 110 / 255, c))));
+
+        if (_historyOpen) LayoutHistory(histBtn, copyPanel, h, pad, gap);
 
         // Képarány-menü a méretkijelző fölött (vagy alatt, ha fölötte nincs hely)
         if (_ratioMenuOpen)
@@ -1562,7 +1576,9 @@ internal sealed class FreezeForm : Form
         using (var bg = new SolidBrush(Color.FromArgb(a * 235 / 255, Ui.Bg)))
             foreach (var p in _panels)
             {
-                using var path = Ui.Rounded(p, p.Height / 2f);
+                // A gombsorok kapszula alakúak, az előzmények rácsa viszont téglalap, enyhe lekerekítéssel
+                float radius = _historyOpen && p == _historyPanel ? HistPanelRadius : p.Height / 2f;
+                using var path = Ui.Rounded(p, radius);
                 g.FillPath(bg, path);
             }
 
@@ -1570,6 +1586,15 @@ internal sealed class FreezeForm : Form
         {
             g.DrawLine(sp, _sepX, _sepTop, _sepX, _sepBottom);
             if (_objSepX >= 0) g.DrawLine(sp, _objSepX, _objSepY.top, _objSepX, _objSepY.bottom);
+        }
+
+        // Korábbi képek: cím (vagy üres állapot)
+        if (_historyOpen && _history != null)
+        {
+            var titleR = new Rectangle(_historyPanel.X, _historyPanel.Y + HistPad - (int)(2 * S), _historyPanel.Width, (int)(28 * S));
+            string title = _history.Count == 0 ? "Még nincs korábbi kép – a Másolás után jelennek meg itt"
+                : "Korábbi képek  ·  kattints egyre, és tovább szerkesztheted";
+            DrawText(g, title, titleR, Ui.Muted, 12, semibold: false);
         }
 
         foreach (var btn in _buttons)
@@ -1744,6 +1769,153 @@ internal sealed class FreezeForm : Form
         float cy0 = lidY + ib.Height * 0.2f, cy1 = ib.Bottom - ib.Height * 0.16f;
         g.DrawLine(pen, ib.Left + ib.Width * 0.4f, cy0, ib.Left + ib.Width * 0.4f, cy1);
         g.DrawLine(pen, ib.Right - ib.Width * 0.4f, cy0, ib.Right - ib.Width * 0.4f, cy1);
+    }
+
+    // ================= Korábbi képek =================
+
+    /// <summary>Egy korábbi képre kattintott: töltődjön be szerkeszthetően (kép, vágás, objektumok).</summary>
+    public event Action<FreezeForm, HistoryItem>? HistoryPicked;
+
+    private bool _historyOpen;
+    private List<(HistoryItem item, Bitmap? thumb)>? _history;
+
+    private void ToggleHistory()
+    {
+        _historyOpen = !_historyOpen;
+        if (_historyOpen)
+        {
+            _ratioMenuOpen = false;
+            _history = History.List().Select(i => (i, History.LoadThumb(i))).ToList();
+        }
+        else DisposeHistory();
+        Invalidate();
+    }
+
+    private void DisposeHistory()
+    {
+        if (_history != null) foreach (var (_, t) in _history) t?.Dispose();
+        _history = null;
+    }
+
+    /// <summary>Legördülő rács a legutóbbi képekkel (5 oszlop), a gomb fölött; ha ott nincs hely, alatta.</summary>
+    private void LayoutHistory(Rectangle btn, Rectangle copyPanel, int h, int pad, int gap)
+    {
+        if (_history == null) return;
+        pad = HistPad;   // a rácsnak több levegő kell, mint a gombsornak
+        int cols = 5, cw = (int)(150 * S), ch = (int)(112 * S), cg = (int)(6 * S), outer = (int)(14 * S);
+        int n = _history.Count, rows = Math.Max(1, (n + cols - 1) / cols);
+        int pw = pad * 2 + cols * cw + (cols - 1) * cg;
+        int ph = pad * 2 + rows * ch + (rows - 1) * cg + (int)(28 * S);   // fölül cím
+        var scr = ScreenRect;
+
+        int px = Math.Clamp(btn.X - pad, outer, Math.Max(outer, scr.Width - pw - outer));
+        int py = copyPanel.Top - ph - (int)(8 * S);
+        if (py < outer) py = copyPanel.Bottom + (int)(8 * S);
+        var panel = new Rectangle(px, py, pw, ph);
+        _panels.Add(panel);
+        _historyPanel = panel;
+
+        for (int i = 0; i < n; i++)
+        {
+            var (item, thumb) = _history[i];
+            var r = new Rectangle(px + pad + (i % cols) * (cw + cg), py + pad + (int)(28 * S) + (i / cols) * (ch + cg), cw, ch);
+            string id = "hist" + i;
+            _buttons.Add(new UiButton(id, r, () =>
+            {
+                _historyOpen = false;
+                StopEditing();
+                HistoryPicked?.Invoke(this, item);
+            }, () => false, (g, rr, c) => DrawHistoryCell(g, rr, thumb, item, id), Plain: true));
+        }
+    }
+
+    private Rectangle _historyPanel;
+
+    // A panel és a cellák lekerekítése egymáshoz igazodik: külső sugár = cella sugara + belső margó
+    private int HistPad => (int)(10 * S);
+    private float HistCellRadius => 8 * S;
+    private float HistPanelRadius => HistCellRadius + HistPad;
+
+    private void DrawHistoryCell(Graphics g, Rectangle r, Bitmap? thumb, HistoryItem item, string id)
+    {
+        bool hover = _hoverId == id;
+        int labelH = (int)(22 * S);
+        var imgArea = new Rectangle(r.X + (int)(4 * S), r.Y + (int)(4 * S), r.Width - (int)(8 * S), r.Height - labelH - (int)(4 * S));
+
+        using (var bg = new SolidBrush(hover ? Color.FromArgb(55, 55, 64) : Color.FromArgb(36, 36, 42)))
+        using (var p = Ui.Rounded(r, HistCellRadius))
+            g.FillPath(bg, p);
+
+        if (thumb != null)
+        {
+            // Arányosan a cella képterületébe
+            double k = Math.Min(imgArea.Width / (double)thumb.Width, imgArea.Height / (double)thumb.Height);
+            int tw = (int)(thumb.Width * k), th = (int)(thumb.Height * k);
+            var dst = new Rectangle(imgArea.X + (imgArea.Width - tw) / 2, imgArea.Y + (imgArea.Height - th) / 2, tw, th);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(thumb, dst);
+            using var edge = new Pen(Color.FromArgb(70, 255, 255, 255), 1f);
+            g.DrawRectangle(edge, dst);
+        }
+
+        if (hover)
+        {
+            using var hp = new Pen(Ui.Accent, 2f * S);
+            using var p = Ui.Rounded(r, HistCellRadius);
+            g.DrawPath(hp, p);
+        }
+
+        // Időpont: ma "14:32", korábban "nov. 21. 14:32"
+        var t = item.Time;
+        string label = t.Date == DateTime.Today ? t.ToString("HH:mm")
+            : t.ToString("MMM d. HH:mm", System.Globalization.CultureInfo.GetCultureInfo("hu-HU"));
+        DrawText(g, label, new Rectangle(r.X, r.Bottom - labelH, r.Width, labelH),
+            hover ? Ui.Text : Ui.Muted, 11.5f, semibold: false);
+    }
+
+    /// <summary>Óra ikon kis lefelé nyíllal (legördülő).</summary>
+    private void DrawHistoryIcon(Graphics g, Rectangle r, Color c)
+    {
+        // Visszafelé forduló kör alakú nyíl (bal oldalt nyitott) + óramutatók, a gomb közepén
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f, R = 7.5f * S;
+        using var pen = new Pen(c, 1.6f * S) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+
+        const float start = 215f, sweep = 290f;   // GDI-szög: óramutató irányában, 0° = jobbra
+        g.DrawArc(pen, cx - R, cy - R, R * 2, R * 2, start, sweep);
+
+        // Nyílhegy az ív elején, az óramutatóval ellentétes irányba (a rés felé) mutat
+        double t = start * Math.PI / 180;
+        var tip = new PointF(cx + R * (float)Math.Cos(t), cy + R * (float)Math.Sin(t));
+        double dx = Math.Sin(t), dy = -Math.Cos(t);   // érintő, visszafelé
+        float a = 3.2f * S;
+        PointF Wing(double ang)
+        {
+            double bx = -dx, by = -dy, cs = Math.Cos(ang), sn = Math.Sin(ang);
+            return new PointF(tip.X + a * (float)(bx * cs - by * sn), tip.Y + a * (float)(bx * sn + by * cs));
+        }
+        g.DrawLines(pen, new[] { Wing(0.75), tip, Wing(-0.75) });
+
+        // Óramutatók
+        g.DrawLines(pen, new[] { new PointF(cx, cy - R * 0.5f), new PointF(cx, cy), new PointF(cx + R * 0.38f, cy + R * 0.26f) });
+    }
+
+    /// <summary>Az előzménybe mentés (a Másoláskor): eredeti kép, vágás, objektumok, kész kép.</summary>
+    public void SaveHistory(Bitmap final)
+    {
+        StopEditing();
+        History.Add(new Bitmap(_shot), _sel, _anns.Select(a => a.Clone()).ToList(), new Bitmap(final));
+    }
+
+    /// <summary>Korábbi kép állapotának visszatöltése: vágás és szerkeszthető objektumok.</summary>
+    public void LoadState(Rectangle sel, List<Annotation> anns)
+    {
+        _sel = Rectangle.Intersect(sel, _full);
+        if (_sel.Width < 4 || _sel.Height < 4) _sel = _full;
+        _anns.Clear();
+        _anns.AddRange(anns);
+        // Hosszú képnél a nézet a vágás tetejéhez ugrik
+        if (_longDoc) _viewY = Math.Clamp(_sel.Top - (int)(40 * S), 0, MaxViewY);
+        Invalidate();
     }
 
     /// <summary>Hosszú kép ikon: álló lap, benne lefelé mutató nyíl.</summary>
@@ -2007,7 +2179,7 @@ internal sealed class FreezeForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _caretTimer.Dispose(); _edgeTimer.Dispose(); _shot.Dispose(); _dim?.Dispose(); _blurSmall?.Dispose(); }
+        if (disposing) { DisposeHistory(); _caretTimer.Dispose(); _edgeTimer.Dispose(); _shot.Dispose(); _dim?.Dispose(); _blurSmall?.Dispose(); }
         base.Dispose(disposing);
     }
 }

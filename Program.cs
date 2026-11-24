@@ -135,6 +135,12 @@ internal sealed class TrayContext : ApplicationContext
         menu.Items.Add("Kép készítése", null, (_, _) => Trigger());
         menu.Items.Add("Mappa megnyitása", null, (_, _) => OpenFolder());
         menu.Items.Add("Mentési mappa…", null, (_, _) => Settings.ChooseSaveFolder(null));
+        menu.Items.Add("Korábbi képek törlése", null, (_, _) =>
+        {
+            if (MessageBox.Show("Törlöd az összes korábbi képet az előzményekből?\nA mentett PNG-fájlok megmaradnak.",
+                    "mini_screenshot", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK)
+                History.Clear();
+        });
         menu.Items.Add(autostart);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Kilépés", null, (_, _) => ExitThread());
@@ -205,6 +211,7 @@ internal sealed class TrayContext : ApplicationContext
             f.Confirmed += OnConfirmed;
             f.Cancelled += CloseOverlays;
             f.LongCaptureRequested += StartLong;
+            f.HistoryPicked += OpenHistory;
             _overlays.Add(f);
             f.Show();
         }
@@ -247,6 +254,31 @@ internal sealed class TrayContext : ApplicationContext
         var f = new FreezeForm(screen, longShot, longDoc: true);
         f.Confirmed += OnConfirmed;
         f.Cancelled += CloseOverlays;
+        f.HistoryPicked += OpenHistory;
+        _overlays.Add(f);
+        f.Show();
+        ForceForeground(f);
+    }
+
+    /// <summary>
+    /// Korábbi kép megnyitása: az eredeti kép, a vágás és a rajzolt objektumok szerkeszthetően töltődnek be.
+    /// Ha a kép mérete nem egyezik a kijelzővel (hosszú kép, másik monitor), a görgethető szerkesztőben nyílik meg.
+    /// </summary>
+    private void OpenHistory(FreezeForm source, HistoryItem item)
+    {
+        var data = History.Load(item);
+        if (data == null) return;
+        var (shot, sel, anns) = data.Value;
+        var screen = source.TargetScreen;
+        CloseOverlays();
+
+        bool fits = shot.Size == screen.Bounds.Size;
+        var f = new FreezeForm(screen, shot, longDoc: !fits);
+        f.LoadState(sel, anns);
+        f.Confirmed += OnConfirmed;
+        f.Cancelled += CloseOverlays;
+        f.HistoryPicked += OpenHistory;
+        if (fits) f.LongCaptureRequested += StartLong;
         _overlays.Add(f);
         f.Show();
         ForceForeground(f);
@@ -329,6 +361,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         var crop = source.Crop();
         var screen = source.TargetScreen;
+        source.SaveHistory(crop);   // előzmény: később újra megnyitható és szerkeszthető
         CloseOverlays();
 
         // PNG-mentés csak akkor, ha a Másolás melletti kapcsoló be van kapcsolva

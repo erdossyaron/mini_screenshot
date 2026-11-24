@@ -34,6 +34,7 @@ Az automatikus indulást a tálcaikonon jobb gombbal, az **Indítás a Windows-z
 | Vágólapra másolás | **Másolás** gomb vagy **Enter** |
 | Mentés PNG-be is | a Másolás melletti **kapcsoló** (floppy ikon) – bekapcsolva a Másolás menti is a képet |
 | Hosszú kép | **Hosszú kép** gomb a méretkijelző mellett (lásd lent) |
+| Korábbi képek | **óra ikon** a méretkijelző előtt (lásd lent) |
 | Visszavonás | **Ctrl+Z** – mindig az utolsó mozzanat (rajzolás, mozgatás, vágás, szín, törlés, gépelés…) |
 | Mégse | **Esc** vagy jobb klikk |
 
@@ -49,6 +50,18 @@ Ha több monitorod van, mindegyik befagy, és annak a kijelzőnek a vágását m
 4. A hosszú kép a szerkesztőben nyílik meg: görgővel görgethető, a megszokott vágóval vághatod, és minden eszközzel rajzolhatsz rá.
 
 A rögzített részeket (fejléc, oldalsáv, lebegő beviteli doboz, lábléc) az app felismeri: a fejléc egyszer felül, a lábléc egyszer alul jelenik meg, az oldalsáv csak az első képernyő magasságáig, a görgetett tartalom pedig végig „lefolyik”. Ha valami nem jó, a napló itt van: `%LOCALAPPDATA%\Programs\mini_screenshot\hosszu_kep.log`.
+
+### Korábbi képek (előzmények)
+
+Minden **Másolás** után az app eltárolja a képet az előzmények közé. Az eredeti képernyőkép, a vágás és a rajzolt objektumok külön-külön megmaradnak.
+
+1. Kattints az **óra ikonra** a méretkijelző előtt. Feljön egy rács a legutóbbi képek kicsinyített előnézetével és az időpontjukkal.
+2. Kattints egy képre. Megnyílik a szerkesztőben, és ugyanott folytathatod: a vágás állítható, az objektumok mozgathatók, szerkeszthetők, törölhetők.
+3. A Másolással a módosított kép új előzményként kerül a listába.
+
+A hosszú képek és a másik monitoron készült képek a görgethető szerkesztőben nyílnak meg.
+
+Az előzmények itt vannak: `%LOCALAPPDATA%\Programs\mini_screenshot\elozmenyek`. Mindet törölheted a tálcaikonon jobb gombbal, a **Korábbi képek törlése** ponttal. A mentett PNG-fájlok ettől megmaradnak.
 
 ### Eszközök
 
