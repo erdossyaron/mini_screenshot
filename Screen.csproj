@@ -9,6 +9,12 @@
     <AssemblyName>Screen</AssemblyName>
     <RootNamespace>Screen</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Fényképező ikon: az exe ikonja, és beágyazva a tálcaikonhoz is -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
+  </ItemGroup>
 
 </Project>

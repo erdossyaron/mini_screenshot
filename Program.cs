@@ -413,9 +413,13 @@ internal sealed class TrayContext : ApplicationContext
     private static void OpenFolder() =>
         System.Diagnostics.Process.Start("explorer.exe", $"\"{SaveFolder}\"");
 
-    /// <summary>Minimalista tálcaikon: lekerekített keret, közepén pont.</summary>
+    /// <summary>Tálcaikon: a beágyazott fényképező ikon, a rendszer kis ikonméretében (DPI szerint).</summary>
     private static Icon MakeIcon()
     {
+        using var stream = typeof(TrayContext).Assembly.GetManifestResourceStream("app.ico");
+        if (stream != null) return new Icon(stream, SystemInformation.SmallIconSize);
+
+        // Tartalék, ha az erőforrás hiányzik: lekerekített keret, közepén pont
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
         {
