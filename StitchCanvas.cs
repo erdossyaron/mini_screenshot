@@ -16,38 +16,41 @@ internal sealed class FrameSig
 /// Görgetéses rögzítés összefűzött képe dokumentum-koordinátában.
 /// Dokumentum-sor = képernyő-sor + görgetési pozíció.
 ///
-/// Illesztés: a szélességet 4 függőleges csíkra bontja, és csíkonként 8 egymás utáni sor
-/// együttes lenyomatával szavaztat. Így egy animált sarok vagy egy felugró sáv csak a saját
-/// csíkját és sorait rontja el, a többi szavazat eldönti a helyet. Csak egyértelmű győztest fogad el.
+/// Illesztés: a szélességet sok keskeny függőleges csíkra bontja, és csíkonként 8 egymás utáni sor
+/// együttes lenyomatával szavaztat. Így egy animált háttér, egy felugró sáv vagy egy videó csak a saját
+/// csíkjait és sorait rontja el; a mozdulatlan részek (szöveg, gomb, doboz) szavazatai eldöntik a helyet.
+/// A többször előforduló lenyomat (ismétlődő minta) nem szavaz. Csak egyértelmű győztest fogad el.
 /// </summary>
 internal sealed class StitchCanvas : IDisposable
 {
     public const int ChunkH = 512;
-    private const int Strips = 4;
+    private const int MinStrips = 4, MaxStrips = 28;
     private const int Shingle = 8;             // ennyi egymás utáni sor együtt alkot egy lenyomatot
     private const int ThumbScale = 8;
-    private const int MaxIndexPerKey = 32;
 
     public int Width { get; }
     public int Top { get; private set; }
     public int Bottom { get; private set; }
     public int Height => Bottom - Top;
 
+    private readonly int Strips;               // csíkok száma (a szélességtől függ)
     private readonly int[] _stripX;            // csíkhatárok (Strips + 1 elem)
     private readonly Dictionary<int, Bitmap> _chunks = new();
     private readonly Dictionary<int, Bitmap> _thumbs = new();
     private readonly HashSet<int> _dirtyThumbs = new();
     private readonly Dictionary<int, (long[] sig, bool[] info)> _rows = new();   // dokumentum-sor → csíkonkénti lenyomat
-    private readonly Dictionary<long, List<int>> _index = new();                 // kulcs → dokumentum-sorok (a lenyomat teteje)
+    private readonly Dictionary<long, int> _index = new();                       // kulcs → dokumentum-sor (a lenyomat teteje), -1: ismétlődik
     private readonly HashSet<int> _indexed = new();                              // mely sortetők vannak már indexelve
 
     public int LastVotes { get; private set; }
     public int LastInformative { get; private set; }
 
-    public StitchCanvas(int width, int sigX0, int sigX1)
+    /// <param name="stripW">A kívánt csíkszélesség (px); keskenyebb csík = kevesebb, amit egy animáció elront.</param>
+    public StitchCanvas(int width, int sigX0, int sigX1, int stripW)
     {
         Width = width;
         int x0 = Math.Clamp(sigX0, 0, width - 1), x1 = Math.Clamp(sigX1, x0 + 1, width);
+        Strips = Math.Clamp((x1 - x0) / Math.Max(16, stripW), MinStrips, MaxStrips);
         _stripX = new int[Strips + 1];
         for (int i = 0; i <= Strips; i++) _stripX[i] = x0 + (x1 - x0) * i / Strips;
     }
@@ -115,7 +118,10 @@ internal sealed class StitchCanvas : IDisposable
     /// Hol van a képkocka a rögzített képen belül? Görgetési pozíció (dokumentum-sor = képernyő-sor + pozíció)
     /// vagy null, ha nincs egyértelmű egyezés.
     /// </summary>
-    public int? Match(FrameSig fs, int frameTop, int predicted, int range)
+    /// <param name="center">A keresés közepe (az utolsó ismert hely), <paramref name="range"/> sugárral.</param>
+    /// <param name="predicted">A mozgás folytatásából várt hely: ismétlődő mintánál ez dönt.</param>
+    /// <param name="tol">Mennyivel térhet el a várt helytől az ismétlődő minták közül választott hely.</param>
+    public int? Match(FrameSig fs, int frameTop, int center, int range, int predicted, int tol)
     {
         LastVotes = LastInformative = 0;
         if (Height == 0) return null;
@@ -132,19 +138,24 @@ internal sealed class StitchCanvas : IDisposable
                 if (key == null || key == prev) { prev = key; continue; }
                 prev = key;
                 informative++;
-                if (!_index.TryGetValue(key.Value, out var rows)) continue;
-                foreach (int docY in rows)
-                {
-                    int pos = docY - (frameTop + r);
-                    if (Math.Abs(pos - predicted) > range) continue;
-                    votes[pos] = votes.GetValueOrDefault(pos) + 1;
-                }
+                if (!_index.TryGetValue(key.Value, out int docY) || docY < 0) continue;
+                int pos = docY - (frameTop + r);
+                if (Math.Abs(pos - center) > range) continue;
+                votes[pos] = votes.GetValueOrDefault(pos) + 1;
             }
         }
 
         LastInformative = informative;
-        if (votes.Count == 0) return null;
+        return Winner(votes, predicted, informative, tol);
+    }
 
+    /// <summary>
+    /// A szavazás győztese. A küszöb a beszédes lenyomatok kis hányada: egy nagyrészt animált
+    /// képernyőn is elég, ha a mozdulatlan részek egyértelműen egy helyre szavaznak.
+    /// </summary>
+    private int? Winner(Dictionary<int, int> votes, int predicted, int informative, int tol)
+    {
+        if (votes.Count == 0) return null;
         int best = 0, bestPos = predicted, second = 0;
         foreach (var (pos, v) in votes)
         {
@@ -159,9 +170,66 @@ internal sealed class StitchCanvas : IDisposable
         LastVotes = best;
 
         // Egyértelmű győztes: elég szavazat, és jóval több, mint a második helyezetté
-        bool enough = best >= Math.Max(6, informative / 12);
-        bool clear = best >= second * 2;
-        return enough && clear ? bestPos : null;
+        // Az animált részek lenyomatai sehol nem fordulnak elő, nem szavaznak "rossz" helyre, csak sehova:
+        // ezért nem a beszédes sorok arányát, hanem egy abszolút minimumot és az egyértelműséget nézzük
+        int min = Math.Max(10, informative / 250);
+        if (best < min) return null;
+        // Gyenge győztes messze a várt helytől: inkább véletlen egyezés (pl. egyszínű, animált formák)
+        if (tol > 0 && best < 3 * min && Math.Abs(bestPos - predicted) > 2 * tol) return null;
+        if (best >= second * 2) return bestPos;
+        if (tol <= 0) return null;
+
+        // Ismétlődő minta (egyforma kártyák, gombok): több hely is sok szavazatot kapott.
+        // A mozgás folytatásához illőt választjuk, ha a várt hely közelében csak ő erős jelölt.
+        int? near = null;
+        bool conflict = false;
+        foreach (var (pos, v) in votes)
+        {
+            if (v < Math.Max(min, best / 2)) continue;
+            int dist = Math.Abs(pos - predicted);
+            if (dist <= tol) { if (near == null || votes[near.Value] < v) near = pos; }
+            else if (dist <= 3 * tol) conflict = true;
+        }
+        return near != null && !conflict ? near : null;
+    }
+
+    /// <summary>
+    /// Két képkocka közötti függőleges elmozdulás (b görgetése − a görgetése), a helyben maradó
+    /// sorok nélkül. Null, ha nincs egyértelmű elmozdulás (nem görgettek, csak animáció vagy kurzor).
+    /// </summary>
+    public int? EstimateShift(FrameSig a, FrameSig b)
+    {
+        var idx = new Dictionary<long, int>();
+        for (int s = 0; s < Strips; s++)
+        {
+            int ss = s;
+            for (int r = 0; r + Shingle <= a.Height; r++)
+            {
+                var key = ShingleKey(s, i => a.Row[ss, i], i => a.Info[ss, i], r);
+                if (key == null) continue;
+                idx[key.Value] = idx.TryGetValue(key.Value, out int old) && old != r ? -1 : r;
+            }
+        }
+        var votes = new Dictionary<int, int>();
+        int informative = 0;
+        for (int s = 0; s < Strips; s++)
+        {
+            int ss = s;
+            long? prev = null;
+            for (int r = 0; r + Shingle <= b.Height; r++)
+            {
+                var key = ShingleKey(s, i => b.Row[ss, i], i => b.Info[ss, i], r);
+                if (key == null || key == prev) { prev = key; continue; }
+                prev = key;
+                informative++;
+                if (!idx.TryGetValue(key.Value, out int ra) || ra < 0 || ra == r) continue;   // helyben maradt: fejléc, oldalsáv
+                votes[ra - r] = votes.GetValueOrDefault(ra - r) + 1;
+            }
+        }
+        int saveV = LastVotes;
+        var w = Winner(votes, 0, informative, 0);
+        LastVotes = saveV;
+        return w;
     }
 
     // ================= Tárolás =================
@@ -231,8 +299,8 @@ internal sealed class StitchCanvas : IDisposable
                 int ss = s;
                 var key = ShingleKey(s, i => _rows[i].sig[ss], i => _rows[i].info[ss], d);
                 if (key == null) continue;
-                if (!_index.TryGetValue(key.Value, out var list)) _index[key.Value] = list = new List<int>();
-                if (list.Count < MaxIndexPerKey) list.Add(d);
+                // Ugyanaz a lenyomat máshol is: ismétlődő minta, nem dönt (nem szavaz)
+                _index[key.Value] = _index.TryGetValue(key.Value, out int old) && old != d ? -1 : d;
             }
         }
     }

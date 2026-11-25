@@ -221,15 +221,13 @@ internal sealed class TrayContext : ApplicationContext
         ForceForeground(under);
     }
 
-    // ================= Hosszú kép (görgetve rögzítés) =================
+    // ================= Hosszú kép (felvétel görgetés közben) =================
 
     private LongCapture? _long;
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point p);
-
     /// <summary>
-    /// "Hosszú kép" gomb: a fagyasztás eltűnik, az app lefelé görgeti a kijelölés alatti ablakot,
-    /// és összefűzi a képet. A végén a görgethető szerkesztőben nyílik meg.
+    /// "Hosszú kép" gomb: a fagyasztás eltűnik, a kijelölt terület élő marad, és indul a felvétel.
+    /// A felhasználó maga görget, az app összefűzi. Stop / Enter után a görgethető szerkesztőben nyílik meg.
     /// </summary>
     private void StartLong(FreezeForm source)
     {
@@ -237,11 +235,7 @@ internal sealed class TrayContext : ApplicationContext
         var sel = source.Selection;
         CloseOverlays();
 
-        // A görgetés célja: a kijelölés közepe alatti ablak (a fagyasztott réteg már nincs ott)
-        var center = new Point(screen.Bounds.X + sel.X + sel.Width / 2, screen.Bounds.Y + sel.Y + sel.Height / 2);
-        var target = WindowFromPoint(center);
-
-        _long = new LongCapture(screen, sel, target, center);
+        _long = new LongCapture(screen, sel);
         _long.Finished += OnLongFinished;
         _long.Cancelled += CancelLong;
         _long.Show();
@@ -331,7 +325,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         const int VK_RETURN = 0x0D, VK_ESCAPE = 0x1B;
 
-        // Hosszú kép rögzítése közben: Enter = kész, Esc = mégse
+        // Hosszú kép felvétele közben: Enter = Stop (lezárás), Esc = mégse
         if (_long != null)
         {
             if (vk == VK_ESCAPE) { _ui.BeginInvoke(CancelLong); return true; }

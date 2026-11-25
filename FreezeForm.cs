@@ -48,7 +48,9 @@ internal sealed class FreezeForm : Form
 
     // Hosszú (görgetéssel összefűzött) kép: a dokumentum magasabb a képernyőnél, görgethető nézet
     private readonly bool _longDoc;
-    private readonly int _offX;      // vízszintes középre igazítás
+    private readonly int _centerX;   // keskeny kép: vízszintes középre igazítás
+    private int _viewX;              // széles kép (pásztázott felvétel): vízszintes görgetés
+    private Point? _panFrom;         // középső gombos húzás: a nézet mozgatása
     private int _viewY;              // nézet görgetése (dokumentum-sor a képernyő tetején)
     private readonly System.Windows.Forms.Timer _edgeTimer = new() { Interval = 30 };
 
@@ -130,7 +132,7 @@ internal sealed class FreezeForm : Form
 
         if (longDoc)
         {
-            _offX = Math.Max(0, (screen.Bounds.Width - shot.Width) / 2);
+            _centerX = Math.Max(0, (screen.Bounds.Width - shot.Width) / 2);
         }
         else
         {
@@ -442,7 +444,7 @@ internal sealed class FreezeForm : Form
         "save" => Settings.SaveEnabled ? "Mentés PNG-be: bekapcsolva" : "Mentés PNG-be: kikapcsolva (csak vágólap)",
         "folder" => "Mentési mappa:  " + Settings.SaveFolder,
         "long" => _anns.Count == 0
-            ? "Hosszú kép: lefelé görgetve rögzíti a kijelölt részt"
+            ? "Hosszú kép felvétele: görgess vagy húzd (pásztázd) a kijelölt részt, Stop / Enter zárja"
             : "Hosszú kép: rajzolás előtt használható",
         _ when id.StartsWith("color") => null,
         _ => null,
@@ -732,32 +734,52 @@ internal sealed class FreezeForm : Form
     private bool OnPanel(Point p) => _panels.Any(r => r.Contains(p));
     /// <summary>Képernyős pont → dokumentum-pont (hosszú képnél eltolás és görgetés), a képen belülre szorítva.</summary>
     private Point ClampToScreen(Point p) =>
-        new(Math.Clamp(p.X - _offX, 0, _full.Width), Math.Clamp(p.Y + _viewY, 0, _full.Height));
+        new(Math.Clamp(p.X - OffX, 0, _full.Width), Math.Clamp(p.Y + _viewY, 0, _full.Height));
 
     private Rectangle ScreenRect => new(0, 0, TargetScreen.Bounds.Width, TargetScreen.Bounds.Height);
     private int MaxViewY => Math.Max(0, _full.Height - ScreenRect.Height + (int)(90 * S));   // alul hely az eszköztárnak
+    private int MaxViewX => Math.Max(0, _full.Width - ScreenRect.Width);
+    /// <summary>A dokumentum bal szélének helye a képernyőn: keskeny képnél középen, szélesnél görgetve.</summary>
+    private int OffX => _full.Width <= ScreenRect.Width ? _centerX : -_viewX;
 
     /// <summary>A kijelölés látható része képernyő-koordinátában (az eszköztár elhelyezéséhez).</summary>
     private Rectangle SelOnScreen()
     {
-        var r = Rectangle.Intersect(new Rectangle(_sel.X + _offX, _sel.Y - _viewY, _sel.Width, _sel.Height), ScreenRect);
+        var r = Rectangle.Intersect(new Rectangle(_sel.X + OffX, _sel.Y - _viewY, _sel.Width, _sel.Height), ScreenRect);
         return r.IsEmpty ? new Rectangle(0, ScreenRect.Bottom, ScreenRect.Width, 0) : r;
     }
 
-    /// <summary>Görgő: hosszú képnél a nézetet görgeti (húzás közben is).</summary>
+    /// <summary>Görgő: hosszú képnél a nézetet görgeti (húzás közben is); Shift + görgő: vízszintesen.</summary>
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         if (!_longDoc) return;
-        ScrollView(-(int)(e.Delta * S));
+        int d = -(int)(e.Delta * S);
+        if ((ModifierKeys & Keys.Shift) != 0) ScrollView(d, 0);
+        else ScrollView(0, d);
     }
 
-    private void ScrollView(int dy)
+    /// <summary>Vízszintes görgő (billenő görgő, érintőpad): széles képnél oldalra görget.</summary>
+    protected override void WndProc(ref Message m)
     {
-        int old = _viewY;
+        const int WM_MOUSEHWHEEL = 0x020E;
+        if (m.Msg == WM_MOUSEHWHEEL && _longDoc)
+        {
+            int delta = (short)((long)m.WParam >> 16);
+            ScrollView((int)(delta * S), 0);
+            m.Result = IntPtr.Zero;
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    private void ScrollView(int dx, int dy)
+    {
+        int oldX = _viewX, oldY = _viewY;
+        _viewX = Math.Clamp(_viewX + dx, 0, MaxViewX);
         _viewY = Math.Clamp(_viewY + dy, 0, MaxViewY);
-        if (_viewY == old) return;
-        // Húzás közben a megfogott pont kövesse a nézetet
-        if (Capture)
+        if (_viewX == oldX && _viewY == oldY) return;
+        // Húzás közben a megfogott pont kövesse a nézetet (a középső gombos mozgatás kivételével)
+        if (Capture && _panFrom == null)
         {
             var c = PointToClient(Cursor.Position);
             OnMouseMove(new MouseEventArgs(MouseButtons.Left, 0, c.X, c.Y, 0));
@@ -774,14 +796,18 @@ internal sealed class FreezeForm : Form
         if (!_longDoc || !Capture) return;
         var c = PointToClient(Cursor.Position);
         float zone = 48 * S;
-        int h = ScreenRect.Height;
-        if (c.Y < zone) ScrollView(-(int)(6 * S + 30 * S * (zone - c.Y) / zone));
-        else if (c.Y > h - zone) ScrollView((int)(6 * S + 30 * S * (c.Y - (h - zone)) / zone));
+        int h = ScreenRect.Height, w = ScreenRect.Width;
+        int Speed(float into) => (int)(6 * S + 30 * S * into / zone);
+        int dy = c.Y < zone ? -Speed(zone - c.Y) : c.Y > h - zone ? Speed(c.Y - (h - zone)) : 0;
+        int dx = c.X < zone ? -Speed(zone - c.X) : c.X > w - zone ? Speed(c.X - (w - zone)) : 0;
+        if (dx != 0 || dy != 0) ScrollView(dx, dy);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
         LayoutToolbar();
+        // Középső gomb: a hosszú / széles kép nézetének mozgatása bármelyik eszközzel
+        if (e.Button == MouseButtons.Middle && _longDoc) { _panFrom = e.Location; Cursor = Cursors.SizeAll; return; }
         if (e.Button == MouseButtons.Right) { Cancelled?.Invoke(); return; }
         if (e.Button != MouseButtons.Left) return;
 
@@ -854,6 +880,12 @@ internal sealed class FreezeForm : Form
     protected override void OnMouseMove(MouseEventArgs e)
     {
         LayoutToolbar();
+        if (_panFrom is Point pf)
+        {
+            _panFrom = e.Location;
+            ScrollView(pf.X - e.X, pf.Y - e.Y);
+            return;
+        }
         var p = ClampToScreen(e.Location);
 
         if (_pendingClick && !IsClick(p))
@@ -917,6 +949,7 @@ internal sealed class FreezeForm : Form
     protected override void OnMouseUp(MouseEventArgs e)
     {
         LayoutToolbar();
+        if (e.Button == MouseButtons.Middle && _panFrom != null) { _panFrom = null; Cursor = Cursors.Default; return; }
         if (_pressId != null)
         {
             var id = _pressId;
@@ -1142,8 +1175,8 @@ internal sealed class FreezeForm : Form
         {
             // Hosszú kép: sötét háttér, középre igazított, görgetett dokumentum
             g.Clear(Color.FromArgb(18, 18, 20));
-            g.TranslateTransform(_offX, -_viewY);
-            var vis = Rectangle.Intersect(new Rectangle(-_offX, _viewY, ScreenRect.Width, ScreenRect.Height), _full);
+            g.TranslateTransform(OffX, -_viewY);
+            var vis = Rectangle.Intersect(new Rectangle(-OffX, _viewY, ScreenRect.Width, ScreenRect.Height), _full);
             if (!vis.IsEmpty)
             {
                 g.DrawImage(_shot, vis, vis, GraphicsUnit.Pixel);
@@ -1451,7 +1484,7 @@ internal sealed class FreezeForm : Form
                 Invalidate();
             },
             () => _ratioMenuOpen, DrawSizeLabel));
-        // Hosszú kép: a kijelölés alatti tartalmat az app lefelé görgetve rögzíti
+        // Hosszú kép: felvétel indul, a kijelölt részen a felhasználó görget, az app összefűzi
         if (!_longDoc)
         {
             bool canLong = _anns.Count == 0;   // a már rajzolt jelölések elvesznének
@@ -1715,7 +1748,7 @@ internal sealed class FreezeForm : Form
         box.Inflate((int)(8 * S), (int)(8 * S));
         var scr = ScreenRect;
         // Dokumentum → képernyő (hosszú képnél eltolás és görgetés)
-        var bs = new Rectangle(box.X + _offX, box.Y - _viewY, box.Width, box.Height);
+        var bs = new Rectangle(box.X + OffX, box.Y - _viewY, box.Width, box.Height);
 
         int px = Math.Clamp(bs.Right - pw, outer, Math.Max(outer, scr.Width - pw - outer));
         int py = bs.Top - h - margin;
@@ -1914,19 +1947,23 @@ internal sealed class FreezeForm : Form
         _anns.Clear();
         _anns.AddRange(anns);
         // Hosszú képnél a nézet a vágás tetejéhez ugrik
-        if (_longDoc) _viewY = Math.Clamp(_sel.Top - (int)(40 * S), 0, MaxViewY);
+        if (_longDoc)
+        {
+            _viewY = Math.Clamp(_sel.Top - (int)(40 * S), 0, MaxViewY);
+            _viewX = Math.Clamp(_sel.Left - (int)(40 * S), 0, MaxViewX);
+        }
         Invalidate();
     }
 
-    /// <summary>Hosszú kép ikon: álló lap, benne lefelé mutató nyíl.</summary>
+    /// <summary>Hosszú kép (felvétel) ikon: gyűrű, benne piros felvétel-pont.</summary>
     private void DrawLongIcon(Graphics g, Rectangle r, Color c)
     {
-        var ib = RectangleF.Inflate(r, -11 * S, -8.5f * S);
-        using var pen = new Pen(c, 1.6f * S) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
-        using (var p = Ui.Rounded(ib, 2.2f * S)) g.DrawPath(pen, p);
-        float cx = ib.Left + ib.Width / 2, top = ib.Top + ib.Height * 0.22f, bot = ib.Bottom - ib.Height * 0.2f, a = ib.Width * 0.28f;
-        g.DrawLine(pen, cx, top, cx, bot);
-        g.DrawLines(pen, new[] { new PointF(cx - a, bot - a), new PointF(cx, bot), new PointF(cx + a, bot - a) });
+        float cx = r.Left + r.Width / 2f, cy = r.Top + r.Height / 2f, ro = 8.5f * S, ri = 4.6f * S;
+        using (var pen = new Pen(c, 1.6f * S))
+            g.DrawEllipse(pen, cx - ro, cy - ro, ro * 2, ro * 2);
+        // A piros pont a gomb átlátszóságát követi (letiltva halványabb)
+        using var dot = new SolidBrush(Color.FromArgb(c.A, 239, 68, 68));
+        g.FillEllipse(dot, cx - ri, cy - ri, ri * 2, ri * 2);
     }
 
     private void ChooseFolder()
