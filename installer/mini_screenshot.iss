@@ -102,11 +102,28 @@ function SetEvent(hEvent: THandle): Integer;
 function CloseHandle(hObject: THandle): Integer;
   external 'CloseHandle@kernel32.dll stdcall';
 
-// A korábbi mentési mappa (frissítéskor), különben Képek\Képernyőképek
-function DefaultSaveFolder: String;
+// A felhasználó Képek mappája (OneDrive-ra áthelyezve is). Az Innónak nincs erre konstansa,
+// ezért a Windows Shell Folders bejegyzéséből olvassuk (ugyanazt adja, mint az app MyPictures-e).
+function PicturesFolder: String;
+var
+  S: String;
 begin
-  if not RegQueryStringValue(HKCU, SettingsKey, 'SaveFolder', Result) or (Result = '') then
-    Result := ExpandConstant('{userpics}\Képernyőképek');
+  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders',
+       'My Pictures', S) and (S <> '') then
+    Result := S
+  else
+    Result := ExpandConstant('{%USERPROFILE}\Pictures');
+end;
+
+// A korábbi mentési mappa (frissítéskor), különben Képek\Képernyőképek (mint Settings.DefaultFolder)
+function DefaultSaveFolder: String;
+var
+  S: String;
+begin
+  if RegQueryStringValue(HKCU, SettingsKey, 'SaveFolder', S) and (S <> '') then
+    Result := S
+  else
+    Result := AddBackslash(PicturesFolder) + 'Képernyőképek';
 end;
 
 function GetSaveFolder(Param: String): String;
