@@ -8,3 +8,7 @@ publish/
 .vscode/
 *.user
 *.suo
+
+# Kiadás: önálló exe és telepítő (tools\publish.ps1, tools\make-setup.ps1)
+dist/
+release/
